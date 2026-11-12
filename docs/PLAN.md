@@ -28,7 +28,7 @@ it runs, fix any errors, commit, push, and check off the phase here.
   - View menu: Zoom In (Cmd =), Zoom Out (Cmd -), Actual Size (Cmd 0), Zoom to Fit (Cmd 9).
   - New images open at zoom-to-fit. Center the image when it is smaller than the view.
 
-- [ ] **Phase 4 – Sidebar**
+- [x] **Phase 4 – Sidebar**
   - View-based NSTableView inside an NSScrollView, one row per image: thumbnail with the filename centered below it, like classic Preview.
   - Selecting a row shows that image in the viewer. Up/down arrow keys change the selection.
   - First image is selected automatically after opening a folder.

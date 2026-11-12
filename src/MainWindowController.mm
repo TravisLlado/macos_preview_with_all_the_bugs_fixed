@@ -10,13 +10,69 @@ static const CGFloat kDefaultSidebarWidth = 200.0;
 static const CGFloat kMinSidebarWidth = 120.0;
 static const CGFloat kMinMainPaneWidth = 300.0;
 
+static const CGFloat kRowHeight = 150.0;
+static const CGFloat kThumbnailHeight = 112.0;
+static const int kThumbnailMaxPixels = 256;
+
+#pragma mark - Sidebar cell
+
+// One sidebar row: a thumbnail with the filename centered below it.
+@interface ThumbnailCellView : NSTableCellView
+@end
+
+@implementation ThumbnailCellView
+
+- (instancetype)initWithFrame:(NSRect)frameRect {
+    self = [super initWithFrame:frameRect];
+    if (self) {
+        NSImageView* imageView = [[NSImageView alloc] initWithFrame:NSZeroRect];
+        imageView.imageScaling = NSImageScaleProportionallyDown;
+        imageView.imageFrameStyle = NSImageFrameNone;
+        imageView.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSTextField* label = [NSTextField labelWithString:@""];
+        label.alignment = NSTextAlignmentCenter;
+        label.font = [NSFont systemFontOfSize:11];
+        label.lineBreakMode = NSLineBreakByTruncatingMiddle;
+        label.maximumNumberOfLines = 1;
+        label.translatesAutoresizingMaskIntoConstraints = NO;
+        [label setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                        forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+        [self addSubview:imageView];
+        [self addSubview:label];
+        self.imageView = imageView;
+        self.textField = label;  // lets NSTableCellView recolor the text when selected
+
+        [NSLayoutConstraint activateConstraints:@[
+            [imageView.topAnchor constraintEqualToAnchor:self.topAnchor constant:8],
+            [imageView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:8],
+            [imageView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-8],
+            [imageView.heightAnchor constraintEqualToConstant:kThumbnailHeight],
+            [label.topAnchor constraintEqualToAnchor:imageView.bottomAnchor constant:6],
+            [label.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:4],
+            [label.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-4],
+        ]];
+    }
+    return self;
+}
+
+@end
+
+#pragma mark - Window controller
+
+@interface MainWindowController () <NSTableViewDataSource, NSTableViewDelegate>
+@end
+
 @implementation MainWindowController {
     NSSplitView* _splitView;
-    NSView* _sidebarView;
+    NSScrollView* _sidebarScrollView;
+    NSTableView* _tableView;
     ImageScrollView* _viewer;
 
     NSURL* _folderURL;
     NSArray<NSString*>* _imagePaths;  // full paths, natural-sorted by filename
+    NSString* _currentPath;           // image shown (or loading) in the viewer
 
     // Full-size images decode on a background queue. Each request bumps the
     // token, so stale requests (the user has moved on) are skipped.
@@ -56,16 +112,36 @@ static const CGFloat kMinMainPaneWidth = 300.0;
     _splitView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     _splitView.delegate = self;
 
-    // Placeholder sidebar; the thumbnail table arrives in Phase 4.
-    _sidebarView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, kDefaultSidebarWidth, NSHeight(content.bounds))];
+    NSRect sidebarFrame = NSMakeRect(0, 0, kDefaultSidebarWidth, NSHeight(content.bounds));
+    _sidebarScrollView = [[NSScrollView alloc] initWithFrame:sidebarFrame];
+    _sidebarScrollView.hasVerticalScroller = YES;
+    _sidebarScrollView.autohidesScrollers = YES;
+    _sidebarScrollView.borderType = NSNoBorder;
+
+    NSTableColumn* column = [[NSTableColumn alloc] initWithIdentifier:@"thumbnail"];
+    column.resizingMask = NSTableColumnAutoresizingMask;
+    _tableView = [[NSTableView alloc] initWithFrame:sidebarFrame];
+    [_tableView addTableColumn:column];
+    _tableView.headerView = nil;
+    _tableView.style = NSTableViewStyleSourceList;
+    _tableView.columnAutoresizingStyle = NSTableViewUniformColumnAutoresizingStyle;
+    _tableView.rowHeight = kRowHeight;
+    _tableView.allowsMultipleSelection = NO;
+    _tableView.allowsEmptySelection = YES;
+    _tableView.dataSource = self;
+    _tableView.delegate = self;
+    _sidebarScrollView.documentView = _tableView;
+
     _viewer = [[ImageScrollView alloc] initWithFrame:NSZeroRect];
 
-    [_splitView addSubview:_sidebarView];
+    [_splitView addSubview:_sidebarScrollView];
     [_splitView addSubview:_viewer];
 
     [content addSubview:_splitView];
     [_splitView adjustSubviews];
     [_splitView setPosition:kDefaultSidebarWidth ofDividerAtIndex:0];
+
+    self.window.initialFirstResponder = _tableView;  // arrow keys move through the list
 }
 
 #pragma mark - Folder loading
@@ -96,14 +172,67 @@ static const CGFloat kMinMainPaneWidth = 300.0;
     }
     _folderURL = folderURL;
     _imagePaths = imagePaths;
+    _currentPath = nil;
 
-    [self showImageAtPath:_imagePaths.firstObject];
+    [_tableView reloadData];
+    if (_imagePaths.count > 0) {
+        [_tableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
+        [_tableView scrollRowToVisible:0];
+    }
+    if (_tableView.selectedRow < 0) {
+        [self showImageAtPath:nil];  // empty folder: clear the viewer
+    } else {
+        [self showSelectedImage];  // selection may not have changed (row 0 -> row 0)
+    }
+    [self.window makeFirstResponder:_tableView];
+}
+
+#pragma mark - Sidebar
+
+- (NSInteger)numberOfRowsInTableView:(NSTableView*)tableView {
+    (void)tableView;
+    return (NSInteger)_imagePaths.count;
+}
+
+- (NSView*)tableView:(NSTableView*)tableView viewForTableColumn:(NSTableColumn*)column row:(NSInteger)row {
+    (void)column;
+    ThumbnailCellView* cell = [tableView makeViewWithIdentifier:@"ThumbnailCell" owner:self];
+    if (!cell) {
+        cell = [[ThumbnailCellView alloc] initWithFrame:NSMakeRect(0, 0, NSWidth(tableView.bounds), kRowHeight)];
+        cell.identifier = @"ThumbnailCell";
+    }
+    NSString* path = _imagePaths[(NSUInteger)row];
+    cell.textField.stringValue = path.lastPathComponent;
+
+    NSImage* thumbnail = nil;
+    CGImageRef cgImage = imageio::createImage(path.fileSystemRepresentation, kThumbnailMaxPixels);
+    if (cgImage) {
+        thumbnail = [[NSImage alloc] initWithCGImage:cgImage
+                                                size:NSMakeSize(CGImageGetWidth(cgImage), CGImageGetHeight(cgImage))];
+        CGImageRelease(cgImage);
+    }
+    cell.imageView.image = thumbnail;
+    return cell;
+}
+
+- (void)tableViewSelectionDidChange:(NSNotification*)notification {
+    (void)notification;
+    [self showSelectedImage];
+}
+
+- (void)showSelectedImage {
+    NSInteger row = _tableView.selectedRow;
+    NSString* path = row >= 0 ? _imagePaths[(NSUInteger)row] : nil;
+    if (path != _currentPath && ![path isEqualToString:_currentPath]) {
+        [self showImageAtPath:path];
+    }
 }
 
 #pragma mark - Main viewer
 
 - (void)showImageAtPath:(NSString*)path {
     uint64_t token = ++_imageToken;
+    _currentPath = path;
     self.window.title = path ? path.lastPathComponent : (_folderURL.lastPathComponent ?: @"");
     if (!path) {
         [_viewer setImage:nil];
@@ -179,7 +308,7 @@ static const CGFloat kMinMainPaneWidth = 300.0;
 - (BOOL)splitView:(NSSplitView*)splitView shouldAdjustSizeOfSubview:(NSView*)view {
     (void)splitView;
     // Keep the sidebar width fixed during window resizes.
-    return view != _sidebarView;
+    return view != _sidebarScrollView;
 }
 
 @end
