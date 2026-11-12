@@ -22,7 +22,7 @@ it runs, fix any errors, commit, push, and check off the phase here.
   - File → Open shows an NSOpenPanel for choosing a folder.
   - C++ code lists image files by extension (jpg, jpeg, png, heic, heif, tif, tiff, gif, webp, bmp), case-insensitive, sorted by filename using natural sort (img2 before img10).
 
-- [ ] **Phase 3 – Main viewer**
+- [x] **Phase 3 – Main viewer**
   - NSImageView inside an NSScrollView with allowsMagnification = YES (pinch-zoom works).
   - Load full images with ImageIO, honoring EXIF orientation.
   - View menu: Zoom In (Cmd =), Zoom Out (Cmd -), Actual Size (Cmd 0), Zoom to Fit (Cmd 9).

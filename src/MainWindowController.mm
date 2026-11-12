@@ -1,6 +1,10 @@
 #import "MainWindowController.h"
+#import "ImageScrollView.h"
 
 #include "ImageList.h"
+#include "ImageLoading.h"
+
+#include <atomic>
 
 static const CGFloat kDefaultSidebarWidth = 200.0;
 static const CGFloat kMinSidebarWidth = 120.0;
@@ -9,9 +13,15 @@ static const CGFloat kMinMainPaneWidth = 300.0;
 @implementation MainWindowController {
     NSSplitView* _splitView;
     NSView* _sidebarView;
-    NSView* _mainPaneView;
+    ImageScrollView* _viewer;
 
+    NSURL* _folderURL;
     NSArray<NSString*>* _imagePaths;  // full paths, natural-sorted by filename
+
+    // Full-size images decode on a background queue. Each request bumps the
+    // token, so stale requests (the user has moved on) are skipped.
+    dispatch_queue_t _imageQueue;
+    std::atomic<uint64_t> _imageToken;
 }
 
 - (instancetype)init {
@@ -29,6 +39,9 @@ static const CGFloat kMinMainPaneWidth = 300.0;
 
     self = [super initWithWindow:window];
     if (self) {
+        _imageQueue = dispatch_queue_create(
+            "previewviewer.image",
+            dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0));
         [self buildSplitView];
     }
     return self;
@@ -43,12 +56,12 @@ static const CGFloat kMinMainPaneWidth = 300.0;
     _splitView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     _splitView.delegate = self;
 
-    // Placeholder panes; the table view and image view arrive in later phases.
+    // Placeholder sidebar; the thumbnail table arrives in Phase 4.
     _sidebarView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, kDefaultSidebarWidth, NSHeight(content.bounds))];
-    _mainPaneView = [[NSView alloc] initWithFrame:NSZeroRect];
+    _viewer = [[ImageScrollView alloc] initWithFrame:NSZeroRect];
 
     [_splitView addSubview:_sidebarView];
-    [_splitView addSubview:_mainPaneView];
+    [_splitView addSubview:_viewer];
 
     [content addSubview:_splitView];
     [_splitView adjustSubviews];
@@ -81,9 +94,69 @@ static const CGFloat kMinMainPaneWidth = 300.0;
     for (const std::string& path : paths) {
         [imagePaths addObject:[fm stringWithFileSystemRepresentation:path.c_str() length:path.size()]];
     }
+    _folderURL = folderURL;
     _imagePaths = imagePaths;
 
-    self.window.title = folderURL.lastPathComponent;
+    [self showImageAtPath:_imagePaths.firstObject];
+}
+
+#pragma mark - Main viewer
+
+- (void)showImageAtPath:(NSString*)path {
+    uint64_t token = ++_imageToken;
+    self.window.title = path ? path.lastPathComponent : (_folderURL.lastPathComponent ?: @"");
+    if (!path) {
+        [_viewer setImage:nil];
+        return;
+    }
+
+    std::string filePath = path.fileSystemRepresentation;
+    dispatch_async(_imageQueue, ^{
+        if (token != self->_imageToken) {
+            return;  // superseded before we started
+        }
+        CGImageRef cgImage = imageio::createImage(filePath);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (token == self->_imageToken) {
+                NSImage* image = nil;
+                if (cgImage) {
+                    NSSize size = NSMakeSize(CGImageGetWidth(cgImage), CGImageGetHeight(cgImage));
+                    image = [[NSImage alloc] initWithCGImage:cgImage size:size];
+                }
+                [self->_viewer setImage:image];
+            }
+            CGImageRelease(cgImage);
+        });
+    });
+}
+
+- (IBAction)zoomIn:(id)sender {
+    (void)sender;
+    [_viewer zoomIn];
+}
+
+- (IBAction)zoomOut:(id)sender {
+    (void)sender;
+    [_viewer zoomOut];
+}
+
+- (IBAction)zoomToActualSize:(id)sender {
+    (void)sender;
+    [_viewer zoomToActualSize];
+}
+
+- (IBAction)zoomToFit:(id)sender {
+    (void)sender;
+    [_viewer zoomToFit];
+}
+
+- (BOOL)validateMenuItem:(NSMenuItem*)item {
+    SEL action = item.action;
+    if (action == @selector(zoomIn:) || action == @selector(zoomOut:) ||
+        action == @selector(zoomToActualSize:) || action == @selector(zoomToFit:)) {
+        return _viewer.hasImage;
+    }
+    return YES;
 }
 
 #pragma mark - NSSplitViewDelegate

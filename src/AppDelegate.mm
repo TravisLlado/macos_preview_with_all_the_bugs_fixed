@@ -37,14 +37,18 @@ static NSMenu* AddSubmenu(NSMenu* menuBar, NSString* title) {
     [appMenu addItem:[NSMenuItem separatorItem]];
     AddItem(appMenu, [@"Quit " stringByAppendingString:appName], @selector(terminate:), @"q");
 
-    // File menu. Open is routed through the responder chain (implemented in Phase 2).
+    // File menu. Open is handled by MainWindowController via the responder chain.
     NSMenu* fileMenu = AddSubmenu(menuBar, @"File");
     AddItem(fileMenu, @"Open…", @selector(openDocument:), @"o");
     [fileMenu addItem:[NSMenuItem separatorItem]];
     AddItem(fileMenu, @"Close", @selector(performClose:), @"w");
 
-    // View menu: zoom commands are added in Phase 3.
-    AddSubmenu(menuBar, @"View");
+    // View menu. Zoom actions are handled by MainWindowController.
+    NSMenu* viewMenu = AddSubmenu(menuBar, @"View");
+    AddItem(viewMenu, @"Zoom In", @selector(zoomIn:), @"=");
+    AddItem(viewMenu, @"Zoom Out", @selector(zoomOut:), @"-");
+    AddItem(viewMenu, @"Actual Size", @selector(zoomToActualSize:), @"0");
+    AddItem(viewMenu, @"Zoom to Fit", @selector(zoomToFit:), @"9");
 
     // Window menu.
     NSMenu* windowMenu = AddSubmenu(menuBar, @"Window");
