@@ -14,7 +14,7 @@ it runs, fix any errors, commit, push, and check off the phase here.
 
 ## Phases
 
-- [ ] **Phase 1 – Skeleton**
+- [x] **Phase 1 – Skeleton**
   - App delegate creating one resizable window with an NSSplitView: sidebar left (~200px default), main pane right.
   - Standard menu bar: app menu with Quit (Cmd-Q), File menu with Open (Cmd-O), View menu (filled in later), Window menu.
 
