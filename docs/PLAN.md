@@ -33,7 +33,7 @@ it runs, fix any errors, commit, push, and check off the phase here.
   - Selecting a row shows that image in the viewer. Up/down arrow keys change the selection.
   - First image is selected automatically after opening a folder.
 
-- [ ] **Phase 5 – Background thumbnails**
+- [x] **Phase 5 – Background thumbnails**
   - Generate thumbnails with CGImageSourceCreateThumbnailAtIndex (max dimension 256px, kCGImageSourceCreateThumbnailWithTransform = true) on a background dispatch queue.
   - Show a placeholder until each thumbnail is ready; update the row on the main thread.
   - Cache thumbnails in memory keyed by file path. Only request thumbnails for visible or nearly visible rows.

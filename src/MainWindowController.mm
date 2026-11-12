@@ -3,6 +3,7 @@
 
 #include "ImageList.h"
 #include "ImageLoading.h"
+#include "ThumbnailCache.h"
 
 #include <atomic>
 
@@ -28,6 +29,7 @@ static const int kThumbnailMaxPixels = 256;
         NSImageView* imageView = [[NSImageView alloc] initWithFrame:NSZeroRect];
         imageView.imageScaling = NSImageScaleProportionallyDown;
         imageView.imageFrameStyle = NSImageFrameNone;
+        imageView.contentTintColor = NSColor.tertiaryLabelColor;  // tints the placeholder symbol
         imageView.translatesAutoresizingMaskIntoConstraints = NO;
 
         NSTextField* label = [NSTextField labelWithString:@""];
@@ -78,6 +80,18 @@ static const int kThumbnailMaxPixels = 256;
     // token, so stale requests (the user has moved on) are skipped.
     dispatch_queue_t _imageQueue;
     std::atomic<uint64_t> _imageToken;
+
+    // Thumbnails decode on a concurrent background queue and are cached on
+    // the main thread. Only rows in [_wantedFirstRow, _wantedLastRow] (visible
+    // plus about a screenful either side) are worth decoding; a queued request
+    // that falls outside the range by the time it runs is dropped. The folder
+    // token discards results that arrive after a different folder was opened.
+    ThumbnailCache _thumbnails;
+    dispatch_queue_t _thumbnailQueue;
+    std::atomic<uint64_t> _folderToken;
+    std::atomic<NSInteger> _wantedFirstRow;
+    std::atomic<NSInteger> _wantedLastRow;
+    NSImage* _placeholder;
 }
 
 - (instancetype)init {
@@ -98,6 +112,13 @@ static const int kThumbnailMaxPixels = 256;
         _imageQueue = dispatch_queue_create(
             "previewviewer.image",
             dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0));
+        _thumbnailQueue = dispatch_queue_create(
+            "previewviewer.thumbnails",
+            dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_CONCURRENT, QOS_CLASS_UTILITY, 0));
+        NSImageSymbolConfiguration* config = [NSImageSymbolConfiguration configurationWithPointSize:40
+                                                                                             weight:NSFontWeightUltraLight];
+        _placeholder = [[NSImage imageWithSystemSymbolName:@"photo" accessibilityDescription:@"Loading"]
+            imageWithSymbolConfiguration:config];
         [self buildSplitView];
     }
     return self;
@@ -124,13 +145,28 @@ static const int kThumbnailMaxPixels = 256;
     [_tableView addTableColumn:column];
     _tableView.headerView = nil;
     _tableView.style = NSTableViewStyleSourceList;
-    _tableView.columnAutoresizingStyle = NSTableViewUniformColumnAutoresizingStyle;
+    _tableView.columnAutoresizingStyle = NSTableViewLastColumnOnlyAutoresizingStyle;
+    _tableView.intercellSpacing = NSZeroSize;
     _tableView.rowHeight = kRowHeight;
     _tableView.allowsMultipleSelection = NO;
     _tableView.allowsEmptySelection = YES;
     _tableView.dataSource = self;
     _tableView.delegate = self;
     _sidebarScrollView.documentView = _tableView;
+    [_tableView sizeLastColumnToFit];  // the single column spans the sidebar
+
+    // Track scrolling and resizing so thumbnails are requested as rows come into view.
+    NSClipView* sidebarClip = _sidebarScrollView.contentView;
+    sidebarClip.postsBoundsChangedNotifications = YES;
+    sidebarClip.postsFrameChangedNotifications = YES;
+    [NSNotificationCenter.defaultCenter addObserver:self
+                                           selector:@selector(sidebarVisibleRectChanged:)
+                                               name:NSViewBoundsDidChangeNotification
+                                             object:sidebarClip];
+    [NSNotificationCenter.defaultCenter addObserver:self
+                                           selector:@selector(sidebarVisibleRectChanged:)
+                                               name:NSViewFrameDidChangeNotification
+                                             object:sidebarClip];
 
     _viewer = [[ImageScrollView alloc] initWithFrame:NSZeroRect];
 
@@ -174,6 +210,8 @@ static const int kThumbnailMaxPixels = 256;
     _imagePaths = imagePaths;
     _currentPath = nil;
 
+    ++_folderToken;
+    _thumbnails.clear();
     [_tableView reloadData];
     if (_imagePaths.count > 0) {
         [_tableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
@@ -185,6 +223,7 @@ static const int kThumbnailMaxPixels = 256;
         [self showSelectedImage];  // selection may not have changed (row 0 -> row 0)
     }
     [self.window makeFirstResponder:_tableView];
+    [self requestThumbnailsForWantedRows];
 }
 
 #pragma mark - Sidebar
@@ -204,15 +243,92 @@ static const int kThumbnailMaxPixels = 256;
     NSString* path = _imagePaths[(NSUInteger)row];
     cell.textField.stringValue = path.lastPathComponent;
 
-    NSImage* thumbnail = nil;
-    CGImageRef cgImage = imageio::createImage(path.fileSystemRepresentation, kThumbnailMaxPixels);
-    if (cgImage) {
-        thumbnail = [[NSImage alloc] initWithCGImage:cgImage
-                                                size:NSMakeSize(CGImageGetWidth(cgImage), CGImageGetHeight(cgImage))];
-        CGImageRelease(cgImage);
-    }
-    cell.imageView.image = thumbnail;
+    cell.imageView.image = [self thumbnailForPath:path];
+    [self requestThumbnailForRow:row];
     return cell;
+}
+
+#pragma mark - Thumbnails
+
+// The cached thumbnail for `path`, or the placeholder.
+- (NSImage*)thumbnailForPath:(NSString*)path {
+    CGImageRef cgImage = _thumbnails.find(path.fileSystemRepresentation);
+    if (!cgImage) {
+        return _placeholder;
+    }
+    return [[NSImage alloc] initWithCGImage:cgImage
+                                       size:NSMakeSize(CGImageGetWidth(cgImage), CGImageGetHeight(cgImage))];
+}
+
+- (void)sidebarVisibleRectChanged:(NSNotification*)notification {
+    (void)notification;
+    [self requestThumbnailsForWantedRows];
+}
+
+// Updates the wanted range and requests thumbnails for it: visible rows first,
+// then the rows within one screenful above and below.
+- (void)requestThumbnailsForWantedRows {
+    NSRect visible = _sidebarScrollView.contentView.documentVisibleRect;
+    NSRange visibleRows = [_tableView rowsInRect:visible];
+    NSRange wantedRows = [_tableView rowsInRect:NSInsetRect(visible, 0, -NSHeight(visible))];
+    if (wantedRows.length == 0) {
+        _wantedFirstRow = 0;
+        _wantedLastRow = -1;
+        return;
+    }
+    _wantedFirstRow = (NSInteger)wantedRows.location;
+    _wantedLastRow = (NSInteger)NSMaxRange(wantedRows) - 1;
+
+    for (NSUInteger row = visibleRows.location; row < NSMaxRange(visibleRows); ++row) {
+        [self requestThumbnailForRow:(NSInteger)row];
+    }
+    for (NSUInteger row = wantedRows.location; row < NSMaxRange(wantedRows); ++row) {
+        [self requestThumbnailForRow:(NSInteger)row];
+    }
+}
+
+- (void)requestThumbnailForRow:(NSInteger)row {
+    std::string path = _imagePaths[(NSUInteger)row].fileSystemRepresentation;
+    if (!_thumbnails.beginRequest(path)) {
+        return;  // cached or already in flight
+    }
+    uint64_t folderToken = _folderToken;
+    dispatch_async(_thumbnailQueue, ^{
+        if (folderToken != self->_folderToken) {
+            return;  // another folder was opened; its cache has been cleared
+        }
+        if (row < self->_wantedFirstRow || row > self->_wantedLastRow) {
+            // Scrolled away before we got to it; allow a fresh request later
+            // (or right away, if the range moved back while this was queued).
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (folderToken == self->_folderToken) {
+                    self->_thumbnails.cancelRequest(path);
+                    if (row >= self->_wantedFirstRow && row <= self->_wantedLastRow) {
+                        [self requestThumbnailForRow:row];
+                    }
+                }
+            });
+            return;
+        }
+        CGImageRef thumbnail = imageio::createImage(path, kThumbnailMaxPixels);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (folderToken == self->_folderToken) {
+                self->_thumbnails.insert(path, thumbnail);  // nullptr records a failure
+                [self reloadThumbnailInRow:row];
+            }
+            CGImageRelease(thumbnail);
+        });
+    });
+}
+
+- (void)reloadThumbnailInRow:(NSInteger)row {
+    if (row >= _tableView.numberOfRows) {
+        return;
+    }
+    NSTableCellView* cell = [_tableView viewAtColumn:0 row:row makeIfNecessary:NO];
+    if (cell) {
+        cell.imageView.image = [self thumbnailForPath:_imagePaths[(NSUInteger)row]];
+    }
 }
 
 - (void)tableViewSelectionDidChange:(NSNotification*)notification {

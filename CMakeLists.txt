@@ -22,6 +22,7 @@ add_executable(PreviewViewer MACOSX_BUNDLE
     src/ImageScrollView.mm
     src/ImageList.cpp
     src/ImageLoading.cpp
+    src/ThumbnailCache.cpp
 )
 
 set_target_properties(PreviewViewer PROPERTIES
