@@ -18,7 +18,7 @@ it runs, fix any errors, commit, push, and check off the phase here.
   - App delegate creating one resizable window with an NSSplitView: sidebar left (~200px default), main pane right.
   - Standard menu bar: app menu with Quit (Cmd-Q), File menu with Open (Cmd-O), View menu (filled in later), Window menu.
 
-- [ ] **Phase 2 – Folder loading**
+- [x] **Phase 2 – Folder loading**
   - File → Open shows an NSOpenPanel for choosing a folder.
   - C++ code lists image files by extension (jpg, jpeg, png, heic, heif, tif, tiff, gif, webp, bmp), case-insensitive, sorted by filename using natural sort (img2 before img10).
 

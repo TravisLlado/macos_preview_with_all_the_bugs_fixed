@@ -1,5 +1,7 @@
 #import "MainWindowController.h"
 
+#include "ImageList.h"
+
 static const CGFloat kDefaultSidebarWidth = 200.0;
 static const CGFloat kMinSidebarWidth = 120.0;
 static const CGFloat kMinMainPaneWidth = 300.0;
@@ -8,6 +10,8 @@ static const CGFloat kMinMainPaneWidth = 300.0;
     NSSplitView* _splitView;
     NSView* _sidebarView;
     NSView* _mainPaneView;
+
+    NSArray<NSString*>* _imagePaths;  // full paths, natural-sorted by filename
 }
 
 - (instancetype)init {
@@ -49,6 +53,37 @@ static const CGFloat kMinMainPaneWidth = 300.0;
     [content addSubview:_splitView];
     [_splitView adjustSubviews];
     [_splitView setPosition:kDefaultSidebarWidth ofDividerAtIndex:0];
+}
+
+#pragma mark - Folder loading
+
+- (IBAction)openDocument:(id)sender {
+    (void)sender;
+    NSOpenPanel* panel = [NSOpenPanel openPanel];
+    panel.canChooseDirectories = YES;
+    panel.canChooseFiles = NO;
+    panel.allowsMultipleSelection = NO;
+    panel.prompt = @"Open";
+    panel.message = @"Choose a folder of images";
+    [panel beginSheetModalForWindow:self.window
+                  completionHandler:^(NSModalResponse result) {
+                      if (result == NSModalResponseOK && panel.URL) {
+                          [self openFolder:panel.URL];
+                      }
+                  }];
+}
+
+- (void)openFolder:(NSURL*)folderURL {
+    std::vector<std::string> paths = imagelist::listImages(folderURL.fileSystemRepresentation);
+
+    NSFileManager* fm = NSFileManager.defaultManager;
+    NSMutableArray<NSString*>* imagePaths = [NSMutableArray arrayWithCapacity:paths.size()];
+    for (const std::string& path : paths) {
+        [imagePaths addObject:[fm stringWithFileSystemRepresentation:path.c_str() length:path.size()]];
+    }
+    _imagePaths = imagePaths;
+
+    self.window.title = folderURL.lastPathComponent;
 }
 
 #pragma mark - NSSplitViewDelegate

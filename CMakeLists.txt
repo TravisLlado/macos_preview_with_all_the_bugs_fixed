@@ -19,6 +19,7 @@ add_executable(PreviewViewer MACOSX_BUNDLE
     src/main.mm
     src/AppDelegate.mm
     src/MainWindowController.mm
+    src/ImageList.cpp
 )
 
 set_target_properties(PreviewViewer PROPERTIES
