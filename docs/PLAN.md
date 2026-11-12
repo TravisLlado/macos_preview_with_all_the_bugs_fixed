@@ -39,10 +39,27 @@ it runs, fix any errors, commit, push, and check off the phase here.
   - Cache thumbnails in memory keyed by file path. Only request thumbnails for visible or nearly visible rows.
   - Opening a folder of 1000+ images must not freeze the UI.
 
-- [ ] **Phase 6 – Polish**
+- [x] **Phase 6 – Polish**
   - Persist window frame and sidebar width between launches.
   - Support opening a single image from Finder (Open With, or dragging onto the Dock icon): load its containing folder and select that file. Add the needed document types to Info.plist.
 
 ## Notes for future sessions
 
+All six phases are complete.
+
 - The app target and bundle are named `PreviewViewer` (`build/PreviewViewer.app`).
+- Source layout (`src/`):
+  - `main.mm`, `AppDelegate.mm`: app startup, menu bar, Finder "Open With" / Dock drops.
+  - `MainWindowController.mm`: window, split view, sidebar table, thumbnail
+    requests, folder loading, persistence (window frame autosave name
+    `MainWindow`, user default `SidebarWidth`).
+  - `ImageScrollView.mm`: magnifiable viewer, centering clip view, zoom commands.
+  - `ImageList.cpp` (C++): extension filter and natural sort.
+  - `ImageLoading.cpp` (C++): ImageIO decode with EXIF orientation (full size and thumbnails).
+  - `ThumbnailCache.cpp` (C++): main-thread cache keyed by file path.
+- Behavior choices worth knowing:
+  - Zoom to Fit never enlarges past 100%, so small images show at actual size, centered.
+    The viewer stays fitted while the window resizes until another zoom is chosen.
+  - The thumbnail cache is cleared whenever a new folder is opened.
+  - Info.plist claims the image types at `LSHandlerRank` `Alternate` (listed in
+    Open With, not the default handler).

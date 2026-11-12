@@ -66,13 +66,27 @@ static NSMenu* AddSubmenu(NSMenu* menuBar, NSString* title) {
 - (void)applicationWillFinishLaunching:(NSNotification*)notification {
     (void)notification;
     [self buildMainMenu];
+    // Created here rather than in didFinishLaunching because, when the app is
+    // launched by opening a file, application:openURLs: arrives in between.
+    _windowController = [[MainWindowController alloc] init];
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification*)notification {
     (void)notification;
-    _windowController = [[MainWindowController alloc] init];
     [_windowController showWindow:nil];
     [NSApp activateIgnoringOtherApps:YES];
+}
+
+// Finder "Open With" or a file dropped on the Dock icon: show the file's
+// folder with that file selected.
+- (void)application:(NSApplication*)application openURLs:(NSArray<NSURL*>*)urls {
+    (void)application;
+    NSURL* fileURL = urls.firstObject;
+    if (!fileURL) {
+        return;
+    }
+    [_windowController openFolder:fileURL.URLByDeletingLastPathComponent selectingFile:fileURL];
+    [_windowController showWindow:nil];
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication*)sender {

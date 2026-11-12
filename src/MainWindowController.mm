@@ -11,6 +11,9 @@ static const CGFloat kDefaultSidebarWidth = 200.0;
 static const CGFloat kMinSidebarWidth = 120.0;
 static const CGFloat kMinMainPaneWidth = 300.0;
 
+static NSString* const kWindowFrameName = @"MainWindow";
+static NSString* const kSidebarWidthKey = @"SidebarWidth";
+
 static const CGFloat kRowHeight = 150.0;
 static const CGFloat kThumbnailHeight = 112.0;
 static const int kThumbnailMaxPixels = 256;
@@ -92,6 +95,8 @@ static const int kThumbnailMaxPixels = 256;
     std::atomic<NSInteger> _wantedFirstRow;
     std::atomic<NSInteger> _wantedLastRow;
     NSImage* _placeholder;
+
+    BOOL _layoutRestored;  // don't save the sidebar width until it has been restored
 }
 
 - (instancetype)init {
@@ -109,6 +114,12 @@ static const int kThumbnailMaxPixels = 256;
 
     self = [super initWithWindow:window];
     if (self) {
+        // Save the window frame whenever it changes, and restore the last one.
+        // (Set via the controller: NSWindowController otherwise overrides the
+        // window's own autosave name with its empty one.)
+        self.shouldCascadeWindows = NO;
+        self.windowFrameAutosaveName = kWindowFrameName;
+        [window setFrameUsingName:kWindowFrameName];
         _imageQueue = dispatch_queue_create(
             "previewviewer.image",
             dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0));
@@ -175,7 +186,9 @@ static const int kThumbnailMaxPixels = 256;
 
     [content addSubview:_splitView];
     [_splitView adjustSubviews];
-    [_splitView setPosition:kDefaultSidebarWidth ofDividerAtIndex:0];
+    CGFloat sidebarWidth = [NSUserDefaults.standardUserDefaults doubleForKey:kSidebarWidthKey];
+    [_splitView setPosition:(sidebarWidth > 0 ? sidebarWidth : kDefaultSidebarWidth) ofDividerAtIndex:0];
+    _layoutRestored = YES;
 
     self.window.initialFirstResponder = _tableView;  // arrow keys move through the list
 }
@@ -199,6 +212,10 @@ static const int kThumbnailMaxPixels = 256;
 }
 
 - (void)openFolder:(NSURL*)folderURL {
+    [self openFolder:folderURL selectingFile:nil];
+}
+
+- (void)openFolder:(NSURL*)folderURL selectingFile:(NSURL*)fileURL {
     std::vector<std::string> paths = imagelist::listImages(folderURL.fileSystemRepresentation);
 
     NSFileManager* fm = NSFileManager.defaultManager;
@@ -212,10 +229,23 @@ static const int kThumbnailMaxPixels = 256;
 
     ++_folderToken;
     _thumbnails.clear();
+    // Select the requested file (matched by name, since the folder path may be
+    // spelled differently, e.g. through a symlink), else the first image.
+    NSUInteger selectedRow = 0;
+    if (fileURL) {
+        NSString* fileName = fileURL.lastPathComponent;
+        NSUInteger index = [_imagePaths indexOfObjectPassingTest:^BOOL(NSString* path, NSUInteger, BOOL*) {
+            return [path.lastPathComponent isEqualToString:fileName];
+        }];
+        if (index != NSNotFound) {
+            selectedRow = index;
+        }
+    }
+
     [_tableView reloadData];
     if (_imagePaths.count > 0) {
-        [_tableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
-        [_tableView scrollRowToVisible:0];
+        [_tableView selectRowIndexes:[NSIndexSet indexSetWithIndex:selectedRow] byExtendingSelection:NO];
+        [_tableView scrollRowToVisible:(NSInteger)selectedRow];
     }
     if (_tableView.selectedRow < 0) {
         [self showImageAtPath:nil];  // empty folder: clear the viewer
@@ -419,6 +449,13 @@ static const int kThumbnailMaxPixels = 256;
                ofSubviewAt:(NSInteger)dividerIndex {
     (void)dividerIndex;
     return MIN(proposedMaximumPosition, NSWidth(splitView.bounds) - kMinMainPaneWidth);
+}
+
+- (void)splitViewDidResizeSubviews:(NSNotification*)notification {
+    (void)notification;
+    if (_layoutRestored) {
+        [NSUserDefaults.standardUserDefaults setDouble:NSWidth(_sidebarScrollView.frame) forKey:kSidebarWidthKey];
+    }
 }
 
 - (BOOL)splitView:(NSSplitView*)splitView shouldAdjustSizeOfSubview:(NSView*)view {
