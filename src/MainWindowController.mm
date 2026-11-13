@@ -77,7 +77,7 @@ static const int kThumbnailMaxPixels = 256;
     NSTableView* _tableView;
     ImageScrollView* _viewer;
 
-    NSURL* _folderURL;
+    NSString* _emptyTitle;
     NSArray<NSString*>* _imagePaths;  // full paths, natural-sorted by filename
     NSString* _currentPath;           // image shown (or loading) in the viewer
 
@@ -89,11 +89,11 @@ static const int kThumbnailMaxPixels = 256;
     // Thumbnails decode on a concurrent background queue and are cached on
     // the main thread. Only rows in [_wantedFirstRow, _wantedLastRow] (visible
     // plus about a screenful either side) are worth decoding; a queued request
-    // that falls outside the range by the time it runs is dropped. The folder
-    // token discards results that arrive after a different folder was opened.
+    // that falls outside the range by the time it runs is dropped. The list
+    // token discards results that arrive after different images were opened.
     ThumbnailCache _thumbnails;
     dispatch_queue_t _thumbnailQueue;
-    std::atomic<uint64_t> _folderToken;
+    std::atomic<uint64_t> _listToken;
     std::atomic<NSInteger> _wantedFirstRow;
     std::atomic<NSInteger> _wantedLastRow;
     NSImage* _placeholder;
@@ -195,72 +195,62 @@ static const int kThumbnailMaxPixels = 256;
     self.window.initialFirstResponder = _tableView;  // arrow keys move through the list
 }
 
-#pragma mark - Folder loading
+#pragma mark - Opening images
 
 - (IBAction)openDocument:(id)sender {
     (void)sender;
     NSOpenPanel* panel = [NSOpenPanel openPanel];
     panel.canChooseDirectories = YES;
     panel.canChooseFiles = YES;
-    panel.allowsMultipleSelection = NO;
+    panel.allowsMultipleSelection = YES;
     // The same formats ImageList recognizes; folders stay selectable too.
     panel.allowedContentTypes = @[
         UTTypeJPEG, UTTypePNG, UTTypeHEIC, UTTypeHEIF, UTTypeTIFF, UTTypeGIF, UTTypeWebP, UTTypeBMP,
     ];
     panel.prompt = @"Open";
-    panel.message = @"Choose an image, or a folder of images";
+    panel.message = @"Choose images, or a folder of images";
     [panel beginSheetModalForWindow:self.window
                   completionHandler:^(NSModalResponse result) {
-                      NSURL* url = panel.URL;
-                      if (result != NSModalResponseOK || !url) {
-                          return;
-                      }
-                      if (url.hasDirectoryPath) {
-                          [self openFolder:url];
-                      } else {
-                          [self openFolder:url.URLByDeletingLastPathComponent selectingFile:url];
+                      if (result == NSModalResponseOK && panel.URLs.count > 0) {
+                          [self openURLs:panel.URLs];
                       }
                   }];
 }
 
-- (void)openFolder:(NSURL*)folderURL {
-    [self openFolder:folderURL selectingFile:nil];
-}
-
-- (void)openFolder:(NSURL*)folderURL selectingFile:(NSURL*)fileURL {
-    std::vector<std::string> paths = imagelist::listImages(folderURL.fileSystemRepresentation);
+- (void)openURLs:(NSArray<NSURL*>*)urls {
+    // Chosen files are shown as-is; a chosen folder contributes all its images.
+    std::vector<std::string> paths;
+    for (NSURL* url in urls) {
+        NSNumber* isDirectory = nil;
+        [url getResourceValue:&isDirectory forKey:NSURLIsDirectoryKey error:nil];
+        if (isDirectory.boolValue) {
+            std::vector<std::string> folderImages = imagelist::listImages(url.fileSystemRepresentation);
+            paths.insert(paths.end(), folderImages.begin(), folderImages.end());
+        } else {
+            paths.push_back(url.fileSystemRepresentation);
+        }
+    }
+    imagelist::sortByFilename(paths);
 
     NSFileManager* fm = NSFileManager.defaultManager;
     NSMutableArray<NSString*>* imagePaths = [NSMutableArray arrayWithCapacity:paths.size()];
     for (const std::string& path : paths) {
         [imagePaths addObject:[fm stringWithFileSystemRepresentation:path.c_str() length:path.size()]];
     }
-    _folderURL = folderURL;
+    // Window title when nothing is shown (e.g. an empty folder).
+    _emptyTitle = urls.count == 1 ? urls.firstObject.lastPathComponent : NSProcessInfo.processInfo.processName;
     _imagePaths = imagePaths;
     _currentPath = nil;
 
-    ++_folderToken;
+    ++_listToken;
     _thumbnails.clear();
-    // Select the requested file (matched by name, since the folder path may be
-    // spelled differently, e.g. through a symlink), else the first image.
-    NSUInteger selectedRow = 0;
-    if (fileURL) {
-        NSString* fileName = fileURL.lastPathComponent;
-        NSUInteger index = [_imagePaths indexOfObjectPassingTest:^BOOL(NSString* path, NSUInteger, BOOL*) {
-            return [path.lastPathComponent isEqualToString:fileName];
-        }];
-        if (index != NSNotFound) {
-            selectedRow = index;
-        }
-    }
-
     [_tableView reloadData];
     if (_imagePaths.count > 0) {
-        [_tableView selectRowIndexes:[NSIndexSet indexSetWithIndex:selectedRow] byExtendingSelection:NO];
-        [_tableView scrollRowToVisible:(NSInteger)selectedRow];
+        [_tableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
+        [_tableView scrollRowToVisible:0];
     }
     if (_tableView.selectedRow < 0) {
-        [self showImageAtPath:nil];  // empty folder: clear the viewer
+        [self showImageAtPath:nil];  // nothing to show: clear the viewer
     } else {
         [self showSelectedImage];  // selection may not have changed (row 0 -> row 0)
     }
@@ -334,16 +324,16 @@ static const int kThumbnailMaxPixels = 256;
     if (!_thumbnails.beginRequest(path)) {
         return;  // cached or already in flight
     }
-    uint64_t folderToken = _folderToken;
+    uint64_t listToken = _listToken;
     dispatch_async(_thumbnailQueue, ^{
-        if (folderToken != self->_folderToken) {
-            return;  // another folder was opened; its cache has been cleared
+        if (listToken != self->_listToken) {
+            return;  // another set of images was opened; the cache was cleared
         }
         if (row < self->_wantedFirstRow || row > self->_wantedLastRow) {
             // Scrolled away before we got to it; allow a fresh request later
             // (or right away, if the range moved back while this was queued).
             dispatch_async(dispatch_get_main_queue(), ^{
-                if (folderToken == self->_folderToken) {
+                if (listToken == self->_listToken) {
                     self->_thumbnails.cancelRequest(path);
                     if (row >= self->_wantedFirstRow && row <= self->_wantedLastRow) {
                         [self requestThumbnailForRow:row];
@@ -354,7 +344,7 @@ static const int kThumbnailMaxPixels = 256;
         }
         CGImageRef thumbnail = imageio::createImage(path, kThumbnailMaxPixels);
         dispatch_async(dispatch_get_main_queue(), ^{
-            if (folderToken == self->_folderToken) {
+            if (listToken == self->_listToken) {
                 self->_thumbnails.insert(path, thumbnail);  // nullptr records a failure
                 [self reloadThumbnailInRow:row];
             }
@@ -391,7 +381,7 @@ static const int kThumbnailMaxPixels = 256;
 - (void)showImageAtPath:(NSString*)path {
     uint64_t token = ++_imageToken;
     _currentPath = path;
-    self.window.title = path ? path.lastPathComponent : (_folderURL.lastPathComponent ?: @"");
+    self.window.title = path ? path.lastPathComponent : (_emptyTitle ?: @"");
     if (!path) {
         [_viewer setImage:nil];
         return;

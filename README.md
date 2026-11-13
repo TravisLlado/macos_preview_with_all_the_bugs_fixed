@@ -18,9 +18,9 @@ open build/PreviewViewer.app
 
 ## Usage
 
-- **File → Open…** (Cmd-O) and choose an image or a folder. The folder's images appear in the sidebar, with the chosen image selected.
+- **File → Open…** (Cmd-O) and choose one or more images, or a folder. Exactly the chosen images appear in the sidebar; a folder brings in all of its images.
 - Click a thumbnail or use the up/down arrow keys to switch images.
 - **View** menu: Zoom In (Cmd =), Zoom Out (Cmd -), Actual Size (Cmd 0), Zoom to Fit (Cmd 9). Pinch to zoom on a trackpad.
-- In Finder, use **Open With → PreviewViewer** on an image (or drop one on the Dock icon) to open its folder with that image selected.
+- In Finder, select one or more images and use **Open With → PreviewViewer** (or drop them on the Dock icon) to view exactly those images.
 
 See [docs/PLAN.md](docs/PLAN.md) for the development plan and progress.

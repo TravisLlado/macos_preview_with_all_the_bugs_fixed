@@ -68,8 +68,17 @@ int naturalCompare(const std::string& a, const std::string& b) {
     return 0;
 }
 
+void sortByFilename(std::vector<std::string>& paths) {
+    auto filename = [](const std::string& path) { return fs::path(path).filename().string(); };
+    std::sort(paths.begin(), paths.end(), [&](const std::string& a, const std::string& b) {
+        int c = naturalCompare(filename(a), filename(b));
+        return c != 0 ? c < 0 : a < b;  // tie-break ("img01" vs "img1") for a stable order
+    });
+    paths.erase(std::unique(paths.begin(), paths.end()), paths.end());
+}
+
 std::vector<std::string> listImages(const std::string& directory) {
-    std::vector<std::string> names;
+    std::vector<std::string> paths;
     std::error_code ec;
     for (fs::directory_iterator it(directory, ec), end; !ec && it != end; it.increment(ec)) {
         std::string name = it->path().filename().string();
@@ -80,19 +89,9 @@ std::vector<std::string> listImages(const std::string& directory) {
         if (!it->is_regular_file(typeEc) || !hasImageExtension(name)) {
             continue;
         }
-        names.push_back(std::move(name));
+        paths.push_back(it->path().string());
     }
-
-    std::sort(names.begin(), names.end(), [](const std::string& a, const std::string& b) {
-        int c = naturalCompare(a, b);
-        return c != 0 ? c < 0 : a < b;  // tie-break ("img01" vs "img1") for a stable order
-    });
-
-    std::vector<std::string> paths;
-    paths.reserve(names.size());
-    for (const std::string& name : names) {
-        paths.push_back((fs::path(directory) / name).string());
-    }
+    sortByFilename(paths);
     return paths;
 }
 

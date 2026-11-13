@@ -16,8 +16,12 @@ bool hasImageExtension(const std::string& filename);
 // Returns <0, 0, or >0 like strcmp.
 int naturalCompare(const std::string& a, const std::string& b);
 
+// Sorts full paths by filename with naturalCompare (full path breaks ties)
+// and removes duplicates.
+void sortByFilename(std::vector<std::string>& paths);
+
 // Full paths of the image files directly inside `directory` (not recursive,
-// hidden files skipped), sorted by filename with naturalCompare.
+// hidden files skipped), sorted with sortByFilename.
 // Returns an empty list if the directory cannot be read.
 std::vector<std::string> listImages(const std::string& directory);
 

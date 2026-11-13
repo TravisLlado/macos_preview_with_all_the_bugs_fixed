@@ -77,15 +77,10 @@ static NSMenu* AddSubmenu(NSMenu* menuBar, NSString* title) {
     [NSApp activateIgnoringOtherApps:YES];
 }
 
-// Finder "Open With" or a file dropped on the Dock icon: show the file's
-// folder with that file selected.
+// Finder "Open With" or files dropped on the Dock icon: show exactly those images.
 - (void)application:(NSApplication*)application openURLs:(NSArray<NSURL*>*)urls {
     (void)application;
-    NSURL* fileURL = urls.firstObject;
-    if (!fileURL) {
-        return;
-    }
-    [_windowController openFolder:fileURL.URLByDeletingLastPathComponent selectingFile:fileURL];
+    [_windowController openURLs:urls];
     [_windowController showWindow:nil];
 }
 
