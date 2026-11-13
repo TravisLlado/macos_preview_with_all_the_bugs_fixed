@@ -47,6 +47,13 @@ it runs, fix any errors, commit, push, and check off the phase here.
   - *Revised after Phase 6:* nothing is remembered between launches (window frame and sidebar width persistence removed).
   - *Revised after Phase 6:* opening files (File → Open with multiple selection, Finder Open With, Dock drops) shows exactly the chosen images, not their whole folder. Choosing a folder still shows all of its images.
 
+## Additional features (after the original plan)
+
+- [x] **Move to Trash** – File → Move to Trash (Cmd-Delete) sends the image selected in the
+  sidebar to the Trash via `NSWorkspace recycleURLs:` (never deleted outright). The next image
+  is selected; with one image left the sidebar hides. Disabled when no sidebar row is selected,
+  including single-image windows.
+
 ## Notes for future sessions
 
 All six phases are complete.

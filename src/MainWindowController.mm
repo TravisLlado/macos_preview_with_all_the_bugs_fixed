@@ -91,6 +91,9 @@ static const int kThumbnailMaxPixels = 256;
     std::atomic<NSInteger> _wantedFirstRow;
     std::atomic<NSInteger> _wantedLastRow;
     NSImage* _placeholder;
+
+    NSMutableSet<NSString*>* _pathsBeingTrashed;  // guards against trashing twice
+    BOOL _removingRow;                            // ignore selection changes mid-removal
 }
 
 - (instancetype)init {
@@ -118,6 +121,7 @@ static const int kThumbnailMaxPixels = 256;
                                                                                              weight:NSFontWeightUltraLight];
         _placeholder = [[NSImage imageWithSystemSymbolName:@"photo" accessibilityDescription:@"Loading"]
             imageWithSymbolConfiguration:config];
+        _pathsBeingTrashed = [NSMutableSet set];
         [self buildSplitView];
     }
     return self;
@@ -296,7 +300,8 @@ static const int kThumbnailMaxPixels = 256;
 }
 
 - (void)requestThumbnailForRow:(NSInteger)row {
-    std::string path = _imagePaths[(NSUInteger)row].fileSystemRepresentation;
+    NSString* imagePath = _imagePaths[(NSUInteger)row];
+    std::string path = imagePath.fileSystemRepresentation;
     if (!_thumbnails.beginRequest(path)) {
         return;  // cached or already in flight
     }
@@ -311,8 +316,9 @@ static const int kThumbnailMaxPixels = 256;
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (listToken == self->_listToken) {
                     self->_thumbnails.cancelRequest(path);
-                    if (row >= self->_wantedFirstRow && row <= self->_wantedLastRow) {
-                        [self requestThumbnailForRow:row];
+                    NSInteger currentRow = [self rowForPath:imagePath];
+                    if (currentRow >= self->_wantedFirstRow && currentRow <= self->_wantedLastRow) {
+                        [self requestThumbnailForRow:currentRow];
                     }
                 }
             });
@@ -322,15 +328,22 @@ static const int kThumbnailMaxPixels = 256;
         dispatch_async(dispatch_get_main_queue(), ^{
             if (listToken == self->_listToken) {
                 self->_thumbnails.insert(path, thumbnail);  // nullptr records a failure
-                [self reloadThumbnailInRow:row];
+                [self reloadThumbnailInRow:[self rowForPath:imagePath]];
             }
             CGImageRelease(thumbnail);
         });
     });
 }
 
+// Current row of `path`, or -1 if it is no longer listed. Looked up rather
+// than remembered because rows shift when files are moved to the Trash.
+- (NSInteger)rowForPath:(NSString*)path {
+    NSUInteger row = [_imagePaths indexOfObject:path];
+    return row == NSNotFound ? -1 : (NSInteger)row;
+}
+
 - (void)reloadThumbnailInRow:(NSInteger)row {
-    if (row >= _tableView.numberOfRows) {
+    if (row < 0 || row >= _tableView.numberOfRows) {
         return;
     }
     NSTableCellView* cell = [_tableView viewAtColumn:0 row:row makeIfNecessary:NO];
@@ -341,7 +354,9 @@ static const int kThumbnailMaxPixels = 256;
 
 - (void)tableViewSelectionDidChange:(NSNotification*)notification {
     (void)notification;
-    [self showSelectedImage];
+    if (!_removingRow) {
+        [self showSelectedImage];
+    }
 }
 
 - (void)showSelectedImage {
@@ -403,8 +418,76 @@ static const int kThumbnailMaxPixels = 256;
     [_viewer zoomToFit];
 }
 
+#pragma mark - Move to Trash
+
+// The image selected in the sidebar, or nil (also nil when the sidebar is
+// hidden, i.e. a single-image window).
+- (NSString*)selectedSidebarPath {
+    NSInteger row = _tableView.selectedRow;
+    if (_sidebarScrollView.hidden || row < 0) {
+        return nil;
+    }
+    return _imagePaths[(NSUInteger)row];
+}
+
+- (IBAction)moveToTrash:(id)sender {
+    (void)sender;
+    NSString* path = [self selectedSidebarPath];
+    if (!path || [_pathsBeingTrashed containsObject:path]) {
+        return;
+    }
+    [_pathsBeingTrashed addObject:path];
+    // NSWorkspace moves the file to the Trash (as Finder does); it is not deleted.
+    [NSWorkspace.sharedWorkspace recycleURLs:@[[NSURL fileURLWithPath:path]]
+                           completionHandler:^(NSDictionary<NSURL*, NSURL*>* newURLs, NSError* error) {
+                               (void)newURLs;
+                               dispatch_async(dispatch_get_main_queue(), ^{
+                                   [self->_pathsBeingTrashed removeObject:path];
+                                   if (error) {
+                                       NSAlert* alert = [NSAlert alertWithError:error];
+                                       [alert beginSheetModalForWindow:self.window completionHandler:nil];
+                                   } else {
+                                       [self removeImagePath:path];
+                                   }
+                               });
+                           }];
+}
+
+// Removes a trashed image from the list and selects the image that took its
+// place (or the new last one).
+- (void)removeImagePath:(NSString*)path {
+    NSInteger row = [self rowForPath:path];
+    if (row < 0) {
+        return;
+    }
+    NSMutableArray<NSString*>* paths = [_imagePaths mutableCopy];
+    [paths removeObjectAtIndex:(NSUInteger)row];
+    _imagePaths = paths;
+
+    _removingRow = YES;
+    [_tableView removeRowsAtIndexes:[NSIndexSet indexSetWithIndex:(NSUInteger)row]
+                      withAnimation:NSTableViewAnimationEffectFade];
+    if (paths.count > 0) {
+        NSUInteger next = MIN((NSUInteger)row, paths.count - 1);
+        [_tableView selectRowIndexes:[NSIndexSet indexSetWithIndex:next] byExtendingSelection:NO];
+        [_tableView scrollRowToVisible:(NSInteger)next];
+    }
+    _removingRow = NO;
+
+    if (_tableView.selectedRow < 0) {
+        [self showImageAtPath:nil];
+    } else {
+        [self showSelectedImage];
+    }
+    [self setSidebarVisible:paths.count != 1];
+    [self requestThumbnailsForWantedRows];
+}
+
 - (BOOL)validateMenuItem:(NSMenuItem*)item {
     SEL action = item.action;
+    if (action == @selector(moveToTrash:)) {
+        return [self selectedSidebarPath] != nil;
+    }
     if (action == @selector(zoomIn:) || action == @selector(zoomOut:) ||
         action == @selector(zoomToActualSize:) || action == @selector(zoomToFit:)) {
         return _viewer.hasImage;

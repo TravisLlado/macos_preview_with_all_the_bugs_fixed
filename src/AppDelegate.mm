@@ -49,11 +49,16 @@ static NSMenu* AddSubmenu(NSMenu* menuBar, NSString* title) {
     [appMenu addItem:[NSMenuItem separatorItem]];
     AddItem(appMenu, [@"Quit " stringByAppendingString:appName], @selector(terminate:), @"q");
 
-    // File menu. Open is handled here; Close by the window.
+    // File menu. Open is handled here; Close by the window; Move to Trash by
+    // MainWindowController.
     NSMenu* fileMenu = AddSubmenu(menuBar, @"File");
     AddItem(fileMenu, @"Open…", @selector(openDocument:), @"o");
     [fileMenu addItem:[NSMenuItem separatorItem]];
     AddItem(fileMenu, @"Close", @selector(performClose:), @"w");
+    [fileMenu addItem:[NSMenuItem separatorItem]];
+    // Cmd-Delete (the Delete key sends backspace), as in Finder.
+    AddItem(fileMenu, @"Move to Trash", @selector(moveToTrash:),
+            [NSString stringWithFormat:@"%C", (unichar)NSBackspaceCharacter]);
 
     // View menu. Zoom actions are handled by MainWindowController.
     NSMenu* viewMenu = AddSubmenu(menuBar, @"View");

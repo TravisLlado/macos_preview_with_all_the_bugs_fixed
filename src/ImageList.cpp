@@ -69,12 +69,24 @@ int naturalCompare(const std::string& a, const std::string& b) {
 }
 
 void sortByFilename(std::vector<std::string>& paths) {
-    auto filename = [](const std::string& path) { return fs::path(path).filename().string(); };
-    std::sort(paths.begin(), paths.end(), [&](const std::string& a, const std::string& b) {
-        int c = naturalCompare(filename(a), filename(b));
-        return c != 0 ? c < 0 : a < b;  // tie-break ("img01" vs "img1") for a stable order
+    // Extract each filename once rather than on every comparison.
+    std::vector<std::pair<std::string, std::string>> entries;  // (filename, path)
+    entries.reserve(paths.size());
+    for (std::string& path : paths) {
+        std::string name = fs::path(path).filename().string();
+        entries.emplace_back(std::move(name), std::move(path));
+    }
+    std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
+        int c = naturalCompare(a.first, b.first);
+        return c != 0 ? c < 0 : a.second < b.second;  // tie-break ("img01" vs "img1") for a stable order
     });
-    paths.erase(std::unique(paths.begin(), paths.end()), paths.end());
+
+    paths.clear();
+    for (auto& entry : entries) {
+        if (paths.empty() || paths.back() != entry.second) {  // drop duplicates
+            paths.push_back(std::move(entry.second));
+        }
+    }
 }
 
 std::vector<std::string> listImages(const std::string& directory) {
