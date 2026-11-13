@@ -42,6 +42,7 @@ it runs, fix any errors, commit, push, and check off the phase here.
 - [x] **Phase 6 – Polish**
   - Persist window frame and sidebar width between launches.
   - Support opening a single image from Finder (Open With, or dragging onto the Dock icon): load its containing folder and select that file. Add the needed document types to Info.plist.
+  - *Revised after Phase 6:* nothing is remembered between launches (window frame and sidebar width persistence removed).
   - *Revised after Phase 6:* opening files (File → Open with multiple selection, Finder Open With, Dock drops) shows exactly the chosen images, not their whole folder. Choosing a folder still shows all of its images.
 
 ## Notes for future sessions
@@ -52,12 +53,13 @@ All six phases are complete.
 - Source layout (`src/`):
   - `main.mm`, `AppDelegate.mm`: app startup, menu bar, Finder "Open With" / Dock drops.
   - `MainWindowController.mm`: window, split view, sidebar table, thumbnail
-    requests, opening images (`openURLs:` takes any mix of files and folders), persistence (window frame autosave name
-    `MainWindow`, user default `SidebarWidth`).
+    requests, opening images (`openURLs:` takes any mix of files and folders).
   - `ImageScrollView.mm`: magnifiable viewer, centering clip view, zoom commands.
   - `ImageList.cpp` (C++): extension filter and natural sort.
   - `ImageLoading.cpp` (C++): ImageIO decode with EXIF orientation (full size and thumbnails).
   - `ThumbnailCache.cpp` (C++): main-thread cache keyed by file path.
+- Guiding rule: behave like macOS Preview, minimally. Where this plan and Preview
+  disagree, follow Preview. The app keeps no state between launches.
 - Behavior choices worth knowing:
   - Zoom to Fit never enlarges past 100%, so small images show at actual size, centered.
     The viewer stays fitted while the window resizes until another zoom is chosen.
