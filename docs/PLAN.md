@@ -61,7 +61,9 @@ it runs, fix any errors, commit, push, and check off the phase here.
   register an undo.
 - [x] **Reorder and Sort By** – drag thumbnails to rearrange; right-click the sidebar for
   Sort By → Name / Date Created / Date Modified (dates oldest first, ties by name; a checkmark
-  shows the active sort, none after a manual drag). Images always open in filename order; the
+  shows the active sort, none after a manual drag). While dragging, a white line (with a faint
+  shadow for light mode) marks the drop point; the upper/lower half of the thumbnail under the
+  pointer decides above/below. Images always open in filename order; the
   order lasts only while the window is open, is never saved, and is not undoable. Undoing a
   trash restores the file at the exact row it came from.
 - [x] **Unit tests** – `ctest --test-dir build`. One test program per area in `tests/`

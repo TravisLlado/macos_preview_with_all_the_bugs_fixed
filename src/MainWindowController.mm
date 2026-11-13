@@ -64,6 +64,79 @@ static NSPasteboardType const kSidebarRowType = @"com.local.previewviewer.sideba
 
 @end
 
+#pragma mark - Sidebar table
+
+// The sidebar table, plus the white line that shows where a dragged
+// thumbnail will land.
+@interface SidebarTableView : NSTableView
+- (void)showDropIndicatorAboveRow:(NSInteger)row;
+- (void)hideDropIndicator;
+@end
+
+// A view that ignores the mouse, so the indicator never gets in the way.
+@interface PassThroughView : NSView
+@end
+
+@implementation PassThroughView
+- (NSView*)hitTest:(NSPoint)point {
+    (void)point;
+    return nil;
+}
+@end
+
+@implementation SidebarTableView {
+    NSView* _dropIndicator;
+}
+
+static const CGFloat kDropIndicatorHeight = 2.0;
+static const CGFloat kDropIndicatorInset = 8.0;
+
+- (void)showDropIndicatorAboveRow:(NSInteger)row {
+    NSInteger count = self.numberOfRows;
+    if (count == 0) {
+        return;
+    }
+    // The table is flipped: y grows downwards. Row `count` means after the last row.
+    CGFloat y = row < count ? NSMinY([self rectOfRow:row]) : NSMaxY([self rectOfRow:count - 1]);
+    y = MAX(kDropIndicatorHeight / 2, MIN(y, NSHeight(self.bounds) - kDropIndicatorHeight / 2));
+    if (!_dropIndicator) {
+        _dropIndicator = [[PassThroughView alloc] initWithFrame:NSZeroRect];
+        _dropIndicator.wantsLayer = YES;
+        _dropIndicator.layer.backgroundColor = NSColor.whiteColor.CGColor;
+        _dropIndicator.layer.cornerRadius = kDropIndicatorHeight / 2;
+        // A faint shadow keeps the white line visible on the light sidebar too.
+        _dropIndicator.layer.shadowColor = NSColor.blackColor.CGColor;
+        _dropIndicator.layer.shadowOpacity = 0.35;
+        _dropIndicator.layer.shadowRadius = 1.0;
+        _dropIndicator.layer.shadowOffset = CGSizeZero;
+    }
+    _dropIndicator.frame = NSMakeRect(kDropIndicatorInset, y - kDropIndicatorHeight / 2,
+                                      NSWidth(self.bounds) - 2 * kDropIndicatorInset, kDropIndicatorHeight);
+    [self addSubview:_dropIndicator positioned:NSWindowAbove relativeTo:nil];  // above every row
+}
+
+- (void)hideDropIndicator {
+    [_dropIndicator removeFromSuperview];
+}
+
+// Both are optional NSDraggingDestination methods, so only forward them if
+// NSTableView implements them.
+- (void)draggingExited:(id<NSDraggingInfo>)sender {
+    [self hideDropIndicator];
+    if ([NSTableView instancesRespondToSelector:_cmd]) {
+        [super draggingExited:sender];
+    }
+}
+
+- (void)draggingEnded:(id<NSDraggingInfo>)sender {
+    [self hideDropIndicator];
+    if ([NSTableView instancesRespondToSelector:_cmd]) {
+        [super draggingEnded:sender];
+    }
+}
+
+@end
+
 #pragma mark - Window controller
 
 @interface MainWindowController () <NSTableViewDataSource, NSTableViewDelegate>
@@ -72,7 +145,7 @@ static NSPasteboardType const kSidebarRowType = @"com.local.previewviewer.sideba
 @implementation MainWindowController {
     NSSplitView* _splitView;
     NSScrollView* _sidebarScrollView;
-    NSTableView* _tableView;
+    SidebarTableView* _tableView;
     ImageScrollView* _viewer;
 
     NSString* _emptyTitle;
@@ -149,7 +222,7 @@ static NSPasteboardType const kSidebarRowType = @"com.local.previewviewer.sideba
 
     NSTableColumn* column = [[NSTableColumn alloc] initWithIdentifier:@"thumbnail"];
     column.resizingMask = NSTableColumnAutoresizingMask;
-    _tableView = [[NSTableView alloc] initWithFrame:sidebarFrame];
+    _tableView = [[SidebarTableView alloc] initWithFrame:sidebarFrame];
     [_tableView addTableColumn:column];
     _tableView.headerView = nil;
     _tableView.style = NSTableViewStyleSourceList;
@@ -163,7 +236,7 @@ static NSPasteboardType const kSidebarRowType = @"com.local.previewviewer.sideba
     // Rows can be dragged to a new position (within this sidebar only).
     [_tableView registerForDraggedTypes:@[ kSidebarRowType ]];
     [_tableView setDraggingSourceOperationMask:NSDragOperationMove forLocal:YES];
-    _tableView.draggingDestinationFeedbackStyle = NSTableViewDraggingDestinationFeedbackStyleGap;
+    _tableView.draggingDestinationFeedbackStyle = NSTableViewDraggingDestinationFeedbackStyleNone;  // own line
     _tableView.menu = [self makeSidebarMenu];
     _sidebarScrollView.documentView = _tableView;
     [_tableView sizeLastColumnToFit];  // the single column spans the sidebar
@@ -535,17 +608,35 @@ static NSPasteboardType const kSidebarRowType = @"com.local.previewviewer.sideba
     _draggedRow = (NSInteger)rowIndexes.firstIndex;
 }
 
+- (void)tableView:(NSTableView*)tableView
+    draggingSession:(NSDraggingSession*)session
+       endedAtPoint:(NSPoint)screenPoint
+          operation:(NSDragOperation)operation {
+    (void)tableView;
+    (void)session;
+    (void)screenPoint;
+    (void)operation;
+    [_tableView hideDropIndicator];  // dropped, cancelled, or released elsewhere
+}
+
 - (NSDragOperation)tableView:(NSTableView*)tableView
                 validateDrop:(id<NSDraggingInfo>)info
                  proposedRow:(NSInteger)row
        proposedDropOperation:(NSTableViewDropOperation)dropOperation {
-    (void)row;
+    (void)dropOperation;
     if (info.draggingSource != tableView) {
+        [_tableView hideDropIndicator];
         return NSDragOperationNone;  // only rows from this sidebar
     }
-    if (dropOperation == NSTableViewDropOn) {
-        [tableView setDropRow:row dropOperation:NSTableViewDropAbove];  // drop between rows
+    // Always drop between rows: above the thumbnail under the pointer if the
+    // pointer is in its upper half, below it if in the lower half.
+    NSPoint point = [tableView convertPoint:info.draggingLocation fromView:nil];
+    NSInteger hovered = [tableView rowAtPoint:point];
+    if (hovered >= 0) {
+        row = point.y < NSMidY([tableView rectOfRow:hovered]) ? hovered : hovered + 1;
     }
+    [tableView setDropRow:row dropOperation:NSTableViewDropAbove];
+    [_tableView showDropIndicatorAboveRow:row];
     return NSDragOperationMove;
 }
 
@@ -556,6 +647,7 @@ static NSPasteboardType const kSidebarRowType = @"com.local.previewviewer.sideba
     (void)tableView;
     (void)info;
     (void)dropOperation;
+    [_tableView hideDropIndicator];
     [self moveImageAtRow:_draggedRow toRow:row];
     return YES;
 }

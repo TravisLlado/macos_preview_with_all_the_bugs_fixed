@@ -941,3 +941,124 @@ TEST(undo_after_reordering_restores_the_exact_row) {
     [c.window.undoManager undo];
     CHECK_EQ(names(c), std::string("r4.jpg,r1.jpg,r2.jpg,r3.jpg"));
 }
+
+#pragma mark - Drop indicator while dragging
+
+// Stands in for a real drag: where the pointer is and where the drag came from.
+@interface FakeDragInfo : NSObject
+@property(nonatomic, weak) id source;
+@property(nonatomic) NSPoint location;  // window coordinates
+@end
+
+@implementation FakeDragInfo
+- (id)draggingSource {
+    return self.source;
+}
+- (NSPoint)draggingLocation {
+    return self.location;
+}
+@end
+
+namespace {
+
+// Asks the sidebar to validate a drag with the pointer at `pointInTable`, as
+// AppKit does while the pointer moves. Returns the drag operation.
+NSDragOperation dragOver(NSTableView* table, NSPoint pointInTable, id source) {
+    FakeDragInfo* info = [[FakeDragInfo alloc] init];
+    info.source = source;
+    info.location = [table convertPoint:pointInTable toView:nil];
+    return [table.dataSource tableView:table
+                          validateDrop:(id<NSDraggingInfo>)info
+                           proposedRow:0
+                 proposedDropOperation:NSTableViewDropOn];
+}
+
+NSView* dropIndicator(NSTableView* table) {
+    NSView* line = [table valueForKey:@"dropIndicator"];
+    return line.superview == table ? line : nil;  // nil when hidden
+}
+
+NSPoint pointInRow(NSTableView* table, NSInteger row, double fraction) {
+    NSRect r = [table rectOfRow:row];
+    return NSMakePoint(NSMidX(r), NSMinY(r) + NSHeight(r) * fraction);  // flipped: 0 = top
+}
+
+}  // namespace
+
+TEST(dragging_shows_a_white_line_where_the_thumbnail_will_land) {
+    App app;
+    app.open(@[ sample("a1.jpg"), sample("a2.jpg"), sample("a3.png"), sample("a10.jpg") ]);
+    NSTableView* table = tableOf(app.controllers()[0]);
+    CHECK(table.draggingDestinationFeedbackStyle == NSTableViewDraggingDestinationFeedbackStyleNone);
+    CHECK(dropIndicator(table) == nil);
+
+    // Upper half of row 2: the line sits between rows 1 and 2.
+    CHECK_EQ(dragOver(table, pointInRow(table, 2, 0.25), table), NSDragOperationMove);
+    NSView* line = dropIndicator(table);
+    REQUIRE(line != nil);
+    CHECK(test::nearlyEqual(NSMidY(line.frame), NSMinY([table rectOfRow:2]), 0.01));
+    CHECK(NSHeight(line.frame) <= 3);
+    CHECK(NSWidth(line.frame) > NSWidth(table.bounds) * 0.8);  // spans the sidebar
+    NSColor* color = [NSColor colorWithCGColor:line.layer.backgroundColor];
+    color = [color colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+    CHECK(color.redComponent > 0.99 && color.greenComponent > 0.99 && color.blueComponent > 0.99);  // white
+}
+
+TEST(the_line_follows_the_pointer) {
+    App app;
+    app.open(@[ sample("a1.jpg"), sample("a2.jpg"), sample("a3.png"), sample("a10.jpg") ]);
+    NSTableView* table = tableOf(app.controllers()[0]);
+
+    dragOver(table, pointInRow(table, 1, 0.75), table);  // lower half of row 1: below it
+    REQUIRE(dropIndicator(table) != nil);
+    CHECK(test::nearlyEqual(NSMidY(dropIndicator(table).frame), NSMinY([table rectOfRow:2]), 0.01));
+
+    dragOver(table, pointInRow(table, 0, 0.1), table);   // top of the first row: above it
+    CHECK(test::nearlyEqual(NSMidY(dropIndicator(table).frame), MAX(1.0, NSMinY([table rectOfRow:0])), 0.01));
+
+    dragOver(table, pointInRow(table, 3, 0.9), table);   // bottom of the last row
+    CHECK(test::nearlyEqual(NSMidY(dropIndicator(table).frame), NSMaxY([table rectOfRow:3]) - 1, 1.01));
+}
+
+TEST(dropping_where_the_line_shows_moves_the_thumbnail_there) {
+    App app;
+    app.open(@[ sample("a1.jpg"), sample("a2.jpg"), sample("a3.png"), sample("a10.jpg") ]);
+    MainWindowController* c = app.controllers()[0];
+    NSTableView* table = tableOf(c);
+    NSDraggingSession* session = nil;
+    [table.dataSource tableView:table draggingSession:session willBeginAtPoint:NSZeroPoint
+                  forRowIndexes:[NSIndexSet indexSetWithIndex:0]];
+    dragOver(table, pointInRow(table, 2, 0.75), table);  // lower half of a3: after it
+    id<NSDraggingInfo> info = nil;
+    [table.dataSource tableView:table acceptDrop:info row:3 dropOperation:NSTableViewDropAbove];
+    CHECK_EQ(names(c), std::string("a2.jpg,a3.png,a1.jpg,a10.jpg"));
+    CHECK(dropIndicator(table) == nil);  // gone after the drop
+}
+
+TEST(the_line_disappears_when_the_drag_leaves_or_ends) {
+    App app;
+    app.open(@[ sample("a1.jpg"), sample("a2.jpg"), sample("a3.png") ]);
+    NSTableView* table = tableOf(app.controllers()[0]);
+    id<NSDraggingInfo> info = nil;
+
+    dragOver(table, pointInRow(table, 1, 0.25), table);
+    REQUIRE(dropIndicator(table) != nil);
+    [table draggingExited:info];  // pointer left the sidebar
+    CHECK(dropIndicator(table) == nil);
+
+    dragOver(table, pointInRow(table, 1, 0.25), table);
+    REQUIRE(dropIndicator(table) != nil);
+    NSDraggingSession* session = nil;
+    [table.dataSource tableView:table draggingSession:session endedAtPoint:NSZeroPoint
+                      operation:NSDragOperationNone];  // cancelled (e.g. Escape)
+    CHECK(dropIndicator(table) == nil);
+}
+
+TEST(drags_from_outside_the_sidebar_are_refused_without_a_line) {
+    App app;
+    app.open(@[ sample("a1.jpg"), sample("a2.jpg"), sample("a3.png") ]);
+    NSTableView* table = tableOf(app.controllers()[0]);
+    NSObject* elsewhere = [[NSObject alloc] init];
+    CHECK_EQ(dragOver(table, pointInRow(table, 1, 0.25), elsewhere), NSDragOperationNone);
+    CHECK(dropIndicator(table) == nil);
+}
