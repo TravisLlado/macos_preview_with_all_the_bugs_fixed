@@ -60,6 +60,13 @@ static NSMenu* AddSubmenu(NSMenu* menuBar, NSString* title) {
     AddItem(fileMenu, @"Move to Trash", @selector(moveToTrash:),
             [NSString stringWithFormat:@"%C", (unichar)NSBackspaceCharacter]);
 
+    // Edit menu. NSWindow handles undo:/redo: with its own NSUndoManager and
+    // keeps the titles current ("Undo Move to Trash").
+    NSMenu* editMenu = AddSubmenu(menuBar, @"Edit");
+    AddItem(editMenu, @"Undo", @selector(undo:), @"z");
+    NSMenuItem* redo = AddItem(editMenu, @"Redo", @selector(redo:), @"z");
+    redo.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+
     // View menu. Zoom actions are handled by MainWindowController.
     NSMenu* viewMenu = AddSubmenu(menuBar, @"View");
     AddItem(viewMenu, @"Zoom In", @selector(zoomIn:), @"=");

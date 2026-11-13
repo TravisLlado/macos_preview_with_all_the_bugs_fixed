@@ -92,8 +92,7 @@ static const int kThumbnailMaxPixels = 256;
     std::atomic<NSInteger> _wantedLastRow;
     NSImage* _placeholder;
 
-    NSMutableSet<NSString*>* _pathsBeingTrashed;  // guards against trashing twice
-    BOOL _removingRow;                            // ignore selection changes mid-removal
+    BOOL _removingRow;  // ignore selection changes while rows are removed/inserted
 }
 
 - (instancetype)init {
@@ -121,7 +120,6 @@ static const int kThumbnailMaxPixels = 256;
                                                                                              weight:NSFontWeightUltraLight];
         _placeholder = [[NSImage imageWithSystemSymbolName:@"photo" accessibilityDescription:@"Loading"]
             imageWithSymbolConfiguration:config];
-        _pathsBeingTrashed = [NSMutableSet set];
         [self buildSplitView];
     }
     return self;
@@ -433,24 +431,85 @@ static const int kThumbnailMaxPixels = 256;
 - (IBAction)moveToTrash:(id)sender {
     (void)sender;
     NSString* path = [self selectedSidebarPath];
-    if (!path || [_pathsBeingTrashed containsObject:path]) {
+    if (path) {
+        [self trashImagePath:path];
+    }
+}
+
+#pragma mark - Undo / redo
+//
+// Undoable actions are registered with the window's NSUndoManager, which the
+// Edit menu's Undo (Cmd-Z) and Redo (Shift-Cmd-Z) items drive. Each undo
+// handler registers its own inverse, which NSUndoManager files as the redo.
+
+static NSString* const kMoveToTrashActionName = @"Move to Trash";
+
+// Moves `path` to the Trash (never deletes it) and removes it from the list.
+// Undo moves it back.
+- (void)trashImagePath:(NSString*)path {
+    NSURL* trashURL = nil;
+    NSError* error = nil;
+    if (![NSFileManager.defaultManager trashItemAtURL:[NSURL fileURLWithPath:path]
+                                     resultingItemURL:&trashURL
+                                                error:&error]) {
+        [self presentErrorSheet:error];
         return;
     }
-    [_pathsBeingTrashed addObject:path];
-    // NSWorkspace moves the file to the Trash (as Finder does); it is not deleted.
-    [NSWorkspace.sharedWorkspace recycleURLs:@[[NSURL fileURLWithPath:path]]
-                           completionHandler:^(NSDictionary<NSURL*, NSURL*>* newURLs, NSError* error) {
-                               (void)newURLs;
-                               dispatch_async(dispatch_get_main_queue(), ^{
-                                   [self->_pathsBeingTrashed removeObject:path];
-                                   if (error) {
-                                       NSAlert* alert = [NSAlert alertWithError:error];
-                                       [alert beginSheetModalForWindow:self.window completionHandler:nil];
-                                   } else {
-                                       [self removeImagePath:path];
-                                   }
-                               });
-                           }];
+    NSInteger row = [self rowForPath:path];
+    [self removeImagePath:path];
+
+    if (trashURL) {  // nil only on volumes that cannot say where the item went
+        NSUndoManager* undoManager = self.window.undoManager;
+        [undoManager registerUndoWithTarget:self
+                                    handler:^(MainWindowController* target) {
+                                        [target restoreImagePath:path fromTrashURL:trashURL atRow:row];
+                                    }];
+        [undoManager setActionName:kMoveToTrashActionName];
+    }
+}
+
+// Undo of Move to Trash: moves the file back to where it was and lists it
+// again at the row it was trashed from.
+- (void)restoreImagePath:(NSString*)path fromTrashURL:(NSURL*)trashURL atRow:(NSInteger)row {
+    NSError* error = nil;
+    if (![NSFileManager.defaultManager moveItemAtURL:trashURL toURL:[NSURL fileURLWithPath:path] error:&error]) {
+        [self presentErrorSheet:error];  // e.g. the Trash was emptied, or the name is taken
+        return;
+    }
+    [self insertImagePath:path atRow:row];
+
+    NSUndoManager* undoManager = self.window.undoManager;
+    [undoManager registerUndoWithTarget:self
+                                handler:^(MainWindowController* target) {
+                                    [target trashImagePath:path];
+                                }];
+    [undoManager setActionName:kMoveToTrashActionName];
+}
+
+- (void)presentErrorSheet:(NSError*)error {
+    NSAlert* alert = [NSAlert alertWithError:error];
+    [alert beginSheetModalForWindow:self.window completionHandler:nil];
+}
+
+// Puts a restored image back at `row` (clamped to the list) and selects it.
+- (void)insertImagePath:(NSString*)path atRow:(NSInteger)row {
+    NSMutableArray<NSString*>* paths = [_imagePaths mutableCopy] ?: [NSMutableArray array];
+    row = MAX(0, MIN(row, (NSInteger)paths.count));
+    [paths insertObject:path atIndex:(NSUInteger)row];
+    _imagePaths = paths;
+
+    [self setSidebarVisible:_imagePaths.count != 1];
+    _removingRow = YES;  // suppress intermediate selection changes
+    [_tableView insertRowsAtIndexes:[NSIndexSet indexSetWithIndex:(NSUInteger)row]
+                      withAnimation:NSTableViewAnimationEffectFade];
+    [_tableView selectRowIndexes:[NSIndexSet indexSetWithIndex:(NSUInteger)row] byExtendingSelection:NO];
+    [_tableView scrollRowToVisible:row];
+    _removingRow = NO;
+    [self showSelectedImage];
+    if (!_sidebarScrollView.hidden) {
+        [self.window makeFirstResponder:_tableView];
+    }
+    [self requestThumbnailsForWantedRows];
 }
 
 // Removes a trashed image from the list and selects the image that took its

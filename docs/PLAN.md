@@ -54,6 +54,11 @@ it runs, fix any errors, commit, push, and check off the phase here.
   is selected; with one image left the sidebar hides. Disabled when no sidebar row is selected,
   including single-image windows.
 
+- [x] **Undo / redo** – Edit → Undo (Cmd-Z) / Redo (Shift-Cmd-Z), per window (each window's
+  NSUndoManager). Move to Trash is undoable: the file moves back from the Trash to its original
+  path and row. Trashing uses `NSFileManager trashItemAtURL:` (synchronous, reports where the item
+  went). Opening, selecting and zooming are not undoable. New file-changing actions should
+  register an undo.
 - [x] **Unit tests** – `ctest --test-dir build`. One test program per area in `tests/`
   (ImageList, ImageLoading, ThumbnailCache, viewer, app behavior, app bundle), written against
   `PreviewViewerCore`, a static library of every source file except `main.mm`. Every design

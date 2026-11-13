@@ -1,11 +1,11 @@
 // App behavior: windows, sidebar, opening images, duplicates, thumbnails,
-// menus, no persistence, and Move to Trash.
+// menus, no persistence, Move to Trash, and undo/redo.
 //
 // These drive the real AppDelegate and MainWindowController (windows appear
 // briefly on screen). Two system calls are replaced with fakes so the tests
 // never touch the user's real Trash or show the Open panel:
-//   - -[NSWorkspace recycleURLs:completionHandler:] moves files into a temp
-//     "trash" folder and records the request;
+//   - -[NSFileManager trashItemAtURL:resultingItemURL:error:] moves files into
+//     a temp "trash" folder and records the request;
 //   - -[NSSavePanel beginWithCompletionHandler:] just records the panel.
 
 #import "AppDelegate.h"
@@ -39,30 +39,31 @@ namespace fs = std::filesystem;
 
 #pragma mark - Fakes
 
-static NSMutableArray<NSURL*>* gRecycledURLs;
-static NSError* gRecycleError;
+static NSMutableArray<NSURL*>* gTrashedURLs;
+static NSError* gTrashError;
 static NSString* gFakeTrashDir;
-static double gRecycleDelay;
 static NSSavePanel* gLastPanel;
 
-@implementation NSWorkspace (PVTestFake)
-- (void)pvtest_recycleURLs:(NSArray<NSURL*>*)urls
-         completionHandler:(void (^)(NSDictionary<NSURL*, NSURL*>*, NSError*))handler {
-    NSError* error = gRecycleError;
-    NSMutableDictionary<NSURL*, NSURL*>* moved = [NSMutableDictionary dictionary];
-    if (!error) {
-        for (NSURL* url in urls) {
-            NSURL* destination = [NSURL fileURLWithPath:[gFakeTrashDir stringByAppendingPathComponent:url.lastPathComponent]];
-            [NSFileManager.defaultManager moveItemAtURL:url toURL:destination error:nil];
-            [gRecycledURLs addObject:url];
-            moved[url] = destination;
-        }
+@implementation NSFileManager (PVTestFake)
+- (BOOL)pvtest_trashItemAtURL:(NSURL*)url resultingItemURL:(NSURL**)outURL error:(NSError**)outError {
+    if (gTrashError) {
+        if (outError) *outError = gTrashError;
+        return NO;
     }
-    // Like the real API, report back later on another queue.
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(gRecycleDelay * NSEC_PER_SEC)),
-                   dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
-                       if (handler) handler(moved, error);
-                   });
+    // Like the real Trash, never overwrite: add a number if the name is taken.
+    NSString* name = url.lastPathComponent;
+    NSString* destination = [gFakeTrashDir stringByAppendingPathComponent:name];
+    for (int i = 2; [self fileExistsAtPath:destination]; ++i) {
+        destination = [gFakeTrashDir stringByAppendingPathComponent:
+                                         [NSString stringWithFormat:@"%@ %d.%@", name.stringByDeletingPathExtension, i,
+                                                                    name.pathExtension]];
+    }
+    if (![self moveItemAtURL:url toURL:[NSURL fileURLWithPath:destination] error:outError]) {
+        return NO;
+    }
+    [gTrashedURLs addObject:url];
+    if (outURL) *outURL = [NSURL fileURLWithPath:destination];
+    return YES;
 }
 @end
 
@@ -78,12 +79,12 @@ static void installFakes() {
     if (installed) return;
     installed = true;
     method_exchangeImplementations(
-        class_getInstanceMethod(NSWorkspace.class, @selector(recycleURLs:completionHandler:)),
-        class_getInstanceMethod(NSWorkspace.class, @selector(pvtest_recycleURLs:completionHandler:)));
+        class_getInstanceMethod(NSFileManager.class, @selector(trashItemAtURL:resultingItemURL:error:)),
+        class_getInstanceMethod(NSFileManager.class, @selector(pvtest_trashItemAtURL:resultingItemURL:error:)));
     method_exchangeImplementations(
         class_getInstanceMethod(NSSavePanel.class, @selector(beginWithCompletionHandler:)),
         class_getInstanceMethod(NSSavePanel.class, @selector(pvtest_beginWithCompletionHandler:)));
-    gRecycledURLs = [NSMutableArray array];
+    gTrashedURLs = [NSMutableArray array];
     gFakeTrashDir = @(test::makeTempDir().c_str());
 }
 
@@ -519,6 +520,8 @@ TEST(menu_items_and_shortcuts) {
         {@"File", @"Open…", @selector(openDocument:), @"o", NSEventModifierFlagCommand},
         {@"File", @"Close", @selector(performClose:), @"w", NSEventModifierFlagCommand},
         {@"File", @"Move to Trash", @selector(moveToTrash:), backspace, NSEventModifierFlagCommand},
+        {@"Edit", @"Undo", @selector(undo:), @"z", NSEventModifierFlagCommand},
+        {@"Edit", @"Redo", @selector(redo:), @"z", NSEventModifierFlagCommand | NSEventModifierFlagShift},
         {@"View", @"Zoom In", @selector(zoomIn:), @"=", NSEventModifierFlagCommand},
         {@"View", @"Zoom Out", @selector(zoomOut:), @"-", NSEventModifierFlagCommand},
         {@"View", @"Actual Size", @selector(zoomToActualSize:), @"0", NSEventModifierFlagCommand},
@@ -577,11 +580,24 @@ TEST(move_to_trash_needs_a_sidebar_selection) {
     CHECK(enabled(app.front(), @selector(moveToTrash:)));
 }
 
+// Resets the fake Trash for a test.
+static void resetTrash() {
+    gTrashError = nil;
+    [gTrashedURLs removeAllObjects];
+}
+
+static std::string fakeTrash(const char* name) {
+    return test::str(gFakeTrashDir) + "/" + name;
+}
+
+// Ends the current undo group, as the end of a real key press would.
+static void endEvent() {
+    test::runFor(0.05);
+}
+
 TEST(move_to_trash_sends_the_file_to_the_trash_and_selects_the_next) {
     std::string dir = folderOfCopies({"t1.jpg", "t2.jpg", "t3.jpg", "t4.jpg"});
-    gRecycleError = nil;
-    gRecycleDelay = 0;
-    [gRecycledURLs removeAllObjects];
+    resetTrash();
     App app;
     app.open(@[ url(dir) ]);
     MainWindowController* c = app.controllers()[0];
@@ -589,56 +605,38 @@ TEST(move_to_trash_sends_the_file_to_the_trash_and_selects_the_next) {
 
     [table selectRowIndexes:[NSIndexSet indexSetWithIndex:1] byExtendingSelection:NO];
     [c moveToTrash:nil];
-    REQUIRE(test::runUntil(^BOOL { return c.imagePaths.count == 3; }));
-    REQUIRE(gRecycledURLs.count == 1);
-    CHECK_EQ(test::str(gRecycledURLs[0].path), dir + "/t2.jpg");  // asked macOS to trash it
+    REQUIRE(gTrashedURLs.count == 1);
+    CHECK_EQ(test::str(gTrashedURLs[0].path), dir + "/t2.jpg");  // asked macOS to trash it
     CHECK(!fs::exists(dir + "/t2.jpg"));
-    CHECK(fs::exists(test::str(gFakeTrashDir) + "/t2.jpg"));        // moved, not deleted
+    CHECK(fs::exists(fakeTrash("t2.jpg")));                        // moved, not deleted
     CHECK_EQ(names(c), std::string("t1.jpg,t3.jpg,t4.jpg"));
-    CHECK_EQ(table.selectedRow, NSInteger(1));                       // the image that took its place
+    CHECK_EQ(table.selectedRow, NSInteger(1));                     // the image that took its place
     CHECK_EQ(test::str(c.window.title), std::string("t3.jpg"));
 
     [table selectRowIndexes:[NSIndexSet indexSetWithIndex:2] byExtendingSelection:NO];
     [c moveToTrash:nil];  // the last row
-    REQUIRE(test::runUntil(^BOOL { return c.imagePaths.count == 2; }));
-    CHECK_EQ(table.selectedRow, NSInteger(1));                       // the new last row
+    CHECK_EQ(c.imagePaths.count, NSUInteger(2));
+    CHECK_EQ(table.selectedRow, NSInteger(1));                     // the new last row
     CHECK_EQ(test::str(c.window.title), std::string("t3.jpg"));
 }
 
 TEST(trashing_down_to_one_image_hides_the_sidebar) {
     std::string dir = folderOfCopies({"u1.jpg", "u2.jpg"});
-    gRecycleError = nil;
-    gRecycleDelay = 0;
+    resetTrash();
     App app;
     app.open(@[ url(dir) ]);
     MainWindowController* c = app.controllers()[0];
     [c moveToTrash:nil];
-    REQUIRE(test::runUntil(^BOOL { return c.imagePaths.count == 1; }));
+    CHECK_EQ(c.imagePaths.count, NSUInteger(1));
     CHECK(sidebarOf(c).hidden);
     CHECK(!enabled(c, @selector(moveToTrash:)));
     CHECK_EQ(test::str(c.window.title), std::string("u2.jpg"));
 }
 
-TEST(a_trash_request_in_progress_is_not_repeated) {
-    std::string dir = folderOfCopies({"v1.jpg", "v2.jpg", "v3.jpg"});
-    gRecycleError = nil;
-    gRecycleDelay = 0.3;
-    [gRecycledURLs removeAllObjects];
-    App app;
-    app.open(@[ url(dir) ]);
-    MainWindowController* c = app.controllers()[0];
-    [c moveToTrash:nil];
-    [c moveToTrash:nil];  // pressed again before the first finished
-    test::runFor(0.6);
-    CHECK_EQ(gRecycledURLs.count, NSUInteger(1));
-    CHECK_EQ(c.imagePaths.count, NSUInteger(2));
-    gRecycleDelay = 0;
-}
-
 TEST(a_failed_trash_keeps_the_image_and_shows_the_error) {
     std::string dir = folderOfCopies({"w1.jpg", "w2.jpg"});
-    gRecycleError = [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileWriteNoPermissionError userInfo:nil];
-    gRecycleDelay = 0;
+    resetTrash();
+    gTrashError = [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileWriteNoPermissionError userInfo:nil];
     App app;
     app.open(@[ url(dir) ]);
     MainWindowController* c = app.controllers()[0];
@@ -646,6 +644,150 @@ TEST(a_failed_trash_keeps_the_image_and_shows_the_error) {
     CHECK(test::runUntil(^BOOL { return c.window.attachedSheet != nil; }));
     CHECK_EQ(c.imagePaths.count, NSUInteger(2));
     CHECK(fs::exists(dir + "/w1.jpg"));
+    CHECK(!c.window.undoManager.canUndo);  // nothing happened, so nothing to undo
     if (c.window.attachedSheet) [c.window endSheet:c.window.attachedSheet];
-    gRecycleError = nil;
+    gTrashError = nil;
+}
+
+#pragma mark - Undo / redo
+
+TEST(nothing_to_undo_until_something_changes) {
+    App app;
+    app.open(@[ sample("a1.jpg"), sample("a2.jpg") ]);
+    MainWindowController* c = app.controllers()[0];
+    [tableOf(c) selectRowIndexes:[NSIndexSet indexSetWithIndex:1] byExtendingSelection:NO];
+    [c zoomIn:nil];
+    endEvent();
+    CHECK(!c.window.undoManager.canUndo);  // opening, selecting and zooming are not undoable
+}
+
+TEST(undo_puts_a_trashed_file_back) {
+    std::string dir = folderOfCopies({"x1.jpg", "x2.jpg", "x3.jpg"});
+    resetTrash();
+    App app;
+    app.open(@[ url(dir) ]);
+    MainWindowController* c = app.controllers()[0];
+    NSUndoManager* undo = c.window.undoManager;
+    [tableOf(c) selectRowIndexes:[NSIndexSet indexSetWithIndex:1] byExtendingSelection:NO];
+    [c moveToTrash:nil];
+    endEvent();
+    REQUIRE(undo.canUndo);
+    CHECK_EQ(test::str(undo.undoMenuItemTitle), std::string("Undo Move to Trash"));
+
+    [undo undo];
+    CHECK(fs::exists(dir + "/x2.jpg"));          // back where it was
+    CHECK(!fs::exists(fakeTrash("x2.jpg")));     // and out of the Trash
+    CHECK_EQ(names(c), std::string("x1.jpg,x2.jpg,x3.jpg"));  // in its place in the list
+    CHECK_EQ(tableOf(c).selectedRow, NSInteger(1));
+    CHECK_EQ(test::str(c.window.title), std::string("x2.jpg"));
+    CHECK(undo.canRedo);
+    CHECK_EQ(test::str(undo.redoMenuItemTitle), std::string("Redo Move to Trash"));
+}
+
+TEST(redo_trashes_the_file_again) {
+    std::string dir = folderOfCopies({"y1.jpg", "y2.jpg", "y3.jpg"});
+    resetTrash();
+    App app;
+    app.open(@[ url(dir) ]);
+    MainWindowController* c = app.controllers()[0];
+    NSUndoManager* undo = c.window.undoManager;
+    [c moveToTrash:nil];  // y1
+    endEvent();
+    [undo undo];
+    endEvent();
+    [undo redo];
+    CHECK(!fs::exists(dir + "/y1.jpg"));
+    CHECK(fs::exists(fakeTrash("y1.jpg")));
+    CHECK_EQ(names(c), std::string("y2.jpg,y3.jpg"));
+    CHECK(undo.canUndo);  // and it can be undone again
+    endEvent();
+    [undo undo];
+    CHECK(fs::exists(dir + "/y1.jpg"));
+}
+
+TEST(undo_steps_back_through_several_trashings_in_order) {
+    std::string dir = folderOfCopies({"z1.jpg", "z2.jpg", "z3.jpg", "z4.jpg"});
+    resetTrash();
+    App app;
+    app.open(@[ url(dir) ]);
+    MainWindowController* c = app.controllers()[0];
+    NSUndoManager* undo = c.window.undoManager;
+    [c moveToTrash:nil];  // z1 (row 0)
+    endEvent();
+    [tableOf(c) selectRowIndexes:[NSIndexSet indexSetWithIndex:1] byExtendingSelection:NO];
+    [c moveToTrash:nil];  // z3
+    endEvent();
+    CHECK_EQ(names(c), std::string("z2.jpg,z4.jpg"));
+
+    [undo undo];
+    CHECK_EQ(names(c), std::string("z2.jpg,z3.jpg,z4.jpg"));  // most recent first
+    endEvent();
+    [undo undo];
+    CHECK_EQ(names(c), std::string("z1.jpg,z2.jpg,z3.jpg,z4.jpg"));
+    CHECK(!undo.canUndo);
+    endEvent();
+    [undo redo];
+    [undo redo];
+    CHECK_EQ(names(c), std::string("z2.jpg,z4.jpg"));
+}
+
+TEST(undo_brings_the_sidebar_back) {
+    std::string dir = folderOfCopies({"s1.jpg", "s2.jpg"});
+    resetTrash();
+    App app;
+    app.open(@[ url(dir) ]);
+    MainWindowController* c = app.controllers()[0];
+    [c moveToTrash:nil];
+    endEvent();
+    REQUIRE(sidebarOf(c).hidden);
+    [c.window.undoManager undo];
+    CHECK(!sidebarOf(c).hidden);
+    CHECK_EQ(names(c), std::string("s1.jpg,s2.jpg"));
+    CHECK_EQ(tableOf(c).selectedRow, NSInteger(0));
+}
+
+TEST(undo_when_the_trash_was_emptied_reports_an_error) {
+    std::string dir = folderOfCopies({"e1.jpg", "e2.jpg", "e3.jpg"});
+    resetTrash();
+    App app;
+    app.open(@[ url(dir) ]);
+    MainWindowController* c = app.controllers()[0];
+    [c moveToTrash:nil];  // e1
+    endEvent();
+    fs::remove(fakeTrash("e1.jpg"));  // the user empties the Trash
+    [c.window.undoManager undo];
+    CHECK(test::runUntil(^BOOL { return c.window.attachedSheet != nil; }));
+    CHECK_EQ(names(c), std::string("e2.jpg,e3.jpg"));  // unchanged
+    if (c.window.attachedSheet) [c.window endSheet:c.window.attachedSheet];
+}
+
+TEST(undo_does_not_overwrite_a_new_file_with_the_same_name) {
+    std::string dir = folderOfCopies({"n1.jpg", "n2.jpg", "n3.jpg"});
+    resetTrash();
+    App app;
+    app.open(@[ url(dir) ]);
+    MainWindowController* c = app.controllers()[0];
+    [c moveToTrash:nil];  // n1
+    endEvent();
+    test::touch(dir + "/n1.jpg", "a different file");
+    [c.window.undoManager undo];
+    CHECK(test::runUntil(^BOOL { return c.window.attachedSheet != nil; }));
+    CHECK(fs::exists(fakeTrash("n1.jpg")));  // the trashed copy stays in the Trash
+    CHECK_EQ(fs::file_size(dir + "/n1.jpg"), uintmax_t(16));  // the new file is untouched
+    if (c.window.attachedSheet) [c.window endSheet:c.window.attachedSheet];
+}
+
+TEST(each_window_has_its_own_undo_history) {
+    std::string dirA = folderOfCopies({"pa1.jpg", "pa2.jpg"});
+    std::string dirB = folderOfCopies({"pb1.jpg", "pb2.jpg"});
+    resetTrash();
+    App app;
+    app.open(@[ url(dirA) ]);
+    app.open(@[ url(dirB) ]);
+    MainWindowController* a = app.controllers()[0];
+    MainWindowController* b = app.controllers()[1];
+    [a moveToTrash:nil];
+    endEvent();
+    CHECK(a.window.undoManager.canUndo);
+    CHECK(!b.window.undoManager.canUndo);
 }
