@@ -54,6 +54,12 @@ it runs, fix any errors, commit, push, and check off the phase here.
   is selected; with one image left the sidebar hides. Disabled when no sidebar row is selected,
   including single-image windows.
 
+- [x] **Unit tests** – `ctest --test-dir build`. One test program per area in `tests/`
+  (ImageList, ImageLoading, ThumbnailCache, viewer, app behavior, app bundle), written against
+  `PreviewViewerCore`, a static library of every source file except `main.mm`. Every design
+  decision above has a test; each was checked by reintroducing the old behavior and seeing
+  the test fail. Add a test with each new feature or decision.
+
 ## Notes for future sessions
 
 All six phases are complete.

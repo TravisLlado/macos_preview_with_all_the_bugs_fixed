@@ -15,8 +15,10 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Debug)
 endif()
 
-add_executable(PreviewViewer MACOSX_BUNDLE
-    src/main.mm
+option(PREVIEWVIEWER_BUILD_TESTS "Build the unit tests (run with ctest)" ON)
+
+# Everything except main.mm, shared by the app and the unit tests.
+add_library(PreviewViewerCore STATIC
     src/AppDelegate.mm
     src/MainWindowController.mm
     src/ImageScrollView.mm
@@ -24,19 +26,25 @@ add_executable(PreviewViewer MACOSX_BUNDLE
     src/ImageLoading.cpp
     src/ThumbnailCache.cpp
 )
-
-set_target_properties(PreviewViewer PROPERTIES
-    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/Info.plist.in"
-)
-
-target_compile_options(PreviewViewer PRIVATE
+target_include_directories(PreviewViewerCore PUBLIC src)
+target_compile_options(PreviewViewerCore PUBLIC
     $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
     -Wall -Wextra
 )
-
-target_link_libraries(PreviewViewer PRIVATE
+target_link_libraries(PreviewViewerCore PUBLIC
     "-framework AppKit"
     "-framework ImageIO"
     "-framework CoreGraphics"
     "-framework UniformTypeIdentifiers"
 )
+
+add_executable(PreviewViewer MACOSX_BUNDLE src/main.mm)
+set_target_properties(PreviewViewer PROPERTIES
+    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/Info.plist.in"
+)
+target_link_libraries(PreviewViewer PRIVATE PreviewViewerCore)
+
+if(PREVIEWVIEWER_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()

@@ -16,6 +16,19 @@ cmake --build build
 open build/PreviewViewer.app
 ```
 
+## Tests
+
+```sh
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+The unit tests live in `tests/` and use a tiny built-in assertion helper (no Xcode or
+third-party frameworks). The app tests open real windows briefly while they run. They
+never touch your Trash: the system trash call is replaced with a fake during tests.
+Run a single test program directly, optionally filtered by name, e.g.
+`./build/tests/test_app trash`.
+
 ## Usage
 
 - **File → Open…** (Cmd-O) and choose one or more images, or a folder. Exactly the chosen images open in a new window; a folder brings in all of its images. A single image fills the window; with several, a thumbnail sidebar is shown. Images that are already open in another window are not opened again.
