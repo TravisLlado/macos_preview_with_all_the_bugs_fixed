@@ -42,6 +42,7 @@ it runs, fix any errors, commit, push, and check off the phase here.
 - [x] **Phase 6 – Polish**
   - Persist window frame and sidebar width between launches.
   - Support opening a single image from Finder (Open With, or dragging onto the Dock icon): load its containing folder and select that file. Add the needed document types to Info.plist.
+  - *Revised after Phase 6:* each set of opened images gets its own window (the empty launch window is reused for the first set). The sidebar appears only when a window has more than one image; there is no user control for it. Closing the last window quits.
   - *Revised after Phase 6:* nothing is remembered between launches (window frame and sidebar width persistence removed).
   - *Revised after Phase 6:* opening files (File → Open with multiple selection, Finder Open With, Dock drops) shows exactly the chosen images, not their whole folder. Choosing a folder still shows all of its images.
 
@@ -51,8 +52,9 @@ All six phases are complete.
 
 - The app target and bundle are named `PreviewViewer` (`build/PreviewViewer.app`).
 - Source layout (`src/`):
-  - `main.mm`, `AppDelegate.mm`: app startup, menu bar, Finder "Open With" / Dock drops.
-  - `MainWindowController.mm`: window, split view, sidebar table, thumbnail
+  - `main.mm`, `AppDelegate.mm`: app startup, menu bar, window list, File → Open,
+    Finder "Open With" / Dock drops (`openImagesAtURLs:` picks or creates the window).
+  - `MainWindowController.mm`: one window: split view, sidebar table, thumbnail
     requests, opening images (`openURLs:` takes any mix of files and folders).
   - `ImageScrollView.mm`: magnifiable viewer, centering clip view, zoom commands.
   - `ImageList.cpp` (C++): extension filter and natural sort.

@@ -1,8 +1,6 @@
 #import "MainWindowController.h"
 #import "ImageScrollView.h"
 
-#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
-
 #include "ImageList.h"
 #include "ImageLoading.h"
 #include "ThumbnailCache.h"
@@ -178,31 +176,26 @@ static const int kThumbnailMaxPixels = 256;
     [content addSubview:_splitView];
     [_splitView adjustSubviews];
     [_splitView setPosition:kDefaultSidebarWidth ofDividerAtIndex:0];
+    [self setSidebarVisible:NO];  // shown only when more than one image is open
+}
 
-    self.window.initialFirstResponder = _tableView;  // arrow keys move through the list
+- (void)setSidebarVisible:(BOOL)visible {
+    if (_sidebarScrollView.hidden != visible) {
+        return;
+    }
+    // NSSplitView treats a hidden subview as collapsed: the viewer takes the full width.
+    _sidebarScrollView.hidden = !visible;
+    [_splitView adjustSubviews];
+    if (visible) {
+        [_splitView setPosition:kDefaultSidebarWidth ofDividerAtIndex:0];
+    }
+}
+
+- (BOOL)isEmpty {
+    return _imagePaths.count == 0;
 }
 
 #pragma mark - Opening images
-
-- (IBAction)openDocument:(id)sender {
-    (void)sender;
-    NSOpenPanel* panel = [NSOpenPanel openPanel];
-    panel.canChooseDirectories = YES;
-    panel.canChooseFiles = YES;
-    panel.allowsMultipleSelection = YES;
-    // The same formats ImageList recognizes; folders stay selectable too.
-    panel.allowedContentTypes = @[
-        UTTypeJPEG, UTTypePNG, UTTypeHEIC, UTTypeHEIF, UTTypeTIFF, UTTypeGIF, UTTypeWebP, UTTypeBMP,
-    ];
-    panel.prompt = @"Open";
-    panel.message = @"Choose images, or a folder of images";
-    [panel beginSheetModalForWindow:self.window
-                  completionHandler:^(NSModalResponse result) {
-                      if (result == NSModalResponseOK && panel.URLs.count > 0) {
-                          [self openURLs:panel.URLs];
-                      }
-                  }];
-}
 
 - (void)openURLs:(NSArray<NSURL*>*)urls {
     // Chosen files are shown as-is; a chosen folder contributes all its images.
@@ -241,8 +234,13 @@ static const int kThumbnailMaxPixels = 256;
     } else {
         [self showSelectedImage];  // selection may not have changed (row 0 -> row 0)
     }
-    [self.window makeFirstResponder:_tableView];
-    [self requestThumbnailsForWantedRows];
+
+    BOOL multiple = _imagePaths.count > 1;
+    [self setSidebarVisible:multiple];
+    if (multiple) {
+        [self.window makeFirstResponder:_tableView];  // arrow keys move through the list
+        [self requestThumbnailsForWantedRows];
+    }
 }
 
 #pragma mark - Sidebar
@@ -438,6 +436,12 @@ static const int kThumbnailMaxPixels = 256;
                ofSubviewAt:(NSInteger)dividerIndex {
     (void)dividerIndex;
     return MIN(proposedMaximumPosition, NSWidth(splitView.bounds) - kMinMainPaneWidth);
+}
+
+- (BOOL)splitView:(NSSplitView*)splitView shouldHideDividerAtIndex:(NSInteger)dividerIndex {
+    (void)splitView;
+    (void)dividerIndex;
+    return _sidebarScrollView.hidden;
 }
 
 - (BOOL)splitView:(NSSplitView*)splitView shouldAdjustSizeOfSubview:(NSView*)view {
