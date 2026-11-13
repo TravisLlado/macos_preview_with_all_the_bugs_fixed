@@ -95,4 +95,27 @@ std::vector<std::string> listImages(const std::string& directory) {
     return paths;
 }
 
+std::vector<std::string> collectImages(const std::vector<std::string>& paths) {
+    auto canonical = [](const std::string& path) {
+        std::error_code ec;
+        fs::path resolved = fs::canonical(path, ec);
+        return ec ? path : resolved.string();
+    };
+
+    std::vector<std::string> images;
+    for (const std::string& input : paths) {
+        std::string path = canonical(input);
+        std::error_code ec;
+        if (fs::is_directory(path, ec)) {
+            for (const std::string& image : listImages(path)) {
+                images.push_back(canonical(image));
+            }
+        } else {
+            images.push_back(path);
+        }
+    }
+    sortByFilename(images);
+    return images;
+}
+
 }  // namespace imagelist

@@ -25,4 +25,11 @@ void sortByFilename(std::vector<std::string>& paths);
 // Returns an empty list if the directory cannot be read.
 std::vector<std::string> listImages(const std::string& directory);
 
+// The images to show for a set of opened paths: each folder contributes the
+// images directly inside it, each file is kept as-is. Every path is resolved
+// to its canonical form (symlinks, "/tmp" vs "/private/tmp") so the same file
+// always has the same path; the result is sorted with sortByFilename, without
+// duplicates.
+std::vector<std::string> collectImages(const std::vector<std::string>& paths);
+
 }  // namespace imagelist

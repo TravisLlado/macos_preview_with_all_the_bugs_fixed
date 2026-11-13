@@ -1,7 +1,6 @@
 #import "MainWindowController.h"
 #import "ImageScrollView.h"
 
-#include "ImageList.h"
 #include "ImageLoading.h"
 #include "ThumbnailCache.h"
 
@@ -194,31 +193,23 @@ static const int kThumbnailMaxPixels = 256;
     return _imagePaths.count == 0;
 }
 
+- (NSArray<NSString*>*)imagePaths {
+    return _imagePaths ?: @[];
+}
+
+- (void)selectImagePath:(NSString*)path {
+    NSUInteger row = [_imagePaths indexOfObject:path];
+    if (row != NSNotFound) {
+        [_tableView selectRowIndexes:[NSIndexSet indexSetWithIndex:row] byExtendingSelection:NO];
+        [_tableView scrollRowToVisible:(NSInteger)row];
+    }
+}
+
 #pragma mark - Opening images
 
-- (void)openURLs:(NSArray<NSURL*>*)urls {
-    // Chosen files are shown as-is; a chosen folder contributes all its images.
-    std::vector<std::string> paths;
-    for (NSURL* url in urls) {
-        NSNumber* isDirectory = nil;
-        [url getResourceValue:&isDirectory forKey:NSURLIsDirectoryKey error:nil];
-        if (isDirectory.boolValue) {
-            std::vector<std::string> folderImages = imagelist::listImages(url.fileSystemRepresentation);
-            paths.insert(paths.end(), folderImages.begin(), folderImages.end());
-        } else {
-            paths.push_back(url.fileSystemRepresentation);
-        }
-    }
-    imagelist::sortByFilename(paths);
-
-    NSFileManager* fm = NSFileManager.defaultManager;
-    NSMutableArray<NSString*>* imagePaths = [NSMutableArray arrayWithCapacity:paths.size()];
-    for (const std::string& path : paths) {
-        [imagePaths addObject:[fm stringWithFileSystemRepresentation:path.c_str() length:path.size()]];
-    }
-    // Window title when nothing is shown (e.g. an empty folder).
-    _emptyTitle = urls.count == 1 ? urls.firstObject.lastPathComponent : NSProcessInfo.processInfo.processName;
-    _imagePaths = imagePaths;
+- (void)showImagePaths:(NSArray<NSString*>*)imagePaths emptyTitle:(NSString*)emptyTitle {
+    _emptyTitle = emptyTitle;
+    _imagePaths = [imagePaths copy];
     _currentPath = nil;
 
     ++_listToken;

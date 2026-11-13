@@ -43,6 +43,7 @@ it runs, fix any errors, commit, push, and check off the phase here.
   - Persist window frame and sidebar width between launches.
   - Support opening a single image from Finder (Open With, or dragging onto the Dock icon): load its containing folder and select that file. Add the needed document types to Info.plist.
   - *Revised after Phase 6:* each set of opened images gets its own window (the empty launch window is reused for the first set). The sidebar is hidden only when a window shows exactly one image (the empty launch window shows it); there is no user control for it. Finder can deliver one multi-file Open With as several requests, so requests arriving within 0.3 s are combined into one set. Closing the last window quits.
+  - *Revised after Phase 6:* a file is never open in two windows. Opening a set leaves out images already open elsewhere (compared by canonical path); if all are already open, the window with the first one comes to the front.
   - *Revised after Phase 6:* nothing is remembered between launches (window frame and sidebar width persistence removed).
   - *Revised after Phase 6:* opening files (File → Open with multiple selection, Finder Open With, Dock drops) shows exactly the chosen images, not their whole folder. Choosing a folder still shows all of its images.
 
@@ -57,7 +58,8 @@ All six phases are complete.
   - `MainWindowController.mm`: one window: split view, sidebar table, thumbnail
     requests, opening images (`openURLs:` takes any mix of files and folders).
   - `ImageScrollView.mm`: magnifiable viewer, centering clip view, zoom commands.
-  - `ImageList.cpp` (C++): extension filter and natural sort.
+  - `ImageList.cpp` (C++): extension filter, natural sort, `collectImages` (folders →
+    images, canonical paths, dedupe).
   - `ImageLoading.cpp` (C++): ImageIO decode with EXIF orientation (full size and thumbnails).
   - `ThumbnailCache.cpp` (C++): main-thread cache keyed by file path.
 - Guiding rule: behave like macOS Preview, minimally. Where this plan and Preview

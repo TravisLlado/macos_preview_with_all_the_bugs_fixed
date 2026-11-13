@@ -3,6 +3,8 @@
 
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
+#include "ImageList.h"
+
 // Offset of each new window from the front one, like Preview's cascading.
 static const CGFloat kCascadeOffset = 24.0;
 
@@ -111,13 +113,54 @@ static NSMenu* AddSubmenu(NSMenu* menuBar, NSString* title) {
     return nil;
 }
 
-// Each set of images opens in its own window, reusing an empty window if any.
+// The window already showing `path`, if any.
+- (MainWindowController*)windowControllerShowingPath:(NSString*)path {
+    for (MainWindowController* controller in _windowControllers) {
+        if ([controller.imagePaths containsObject:path]) {
+            return controller;
+        }
+    }
+    return nil;
+}
+
+// Opens a set of files and/or folders in a new window (or an empty one).
+// Images already open in another window are left out, so a file is never
+// open twice; if all of them are open, the window with the first one comes
+// to the front instead.
 - (void)openImagesAtURLs:(NSArray<NSURL*>*)urls {
     if (urls.count == 0) {
         return;
     }
+    std::vector<std::string> inputs;
+    for (NSURL* url in urls) {
+        inputs.push_back(url.fileSystemRepresentation);
+    }
+    std::vector<std::string> images = imagelist::collectImages(inputs);
+
+    NSFileManager* fm = NSFileManager.defaultManager;
+    NSMutableArray<NSString*>* newPaths = [NSMutableArray array];
+    MainWindowController* alreadyOpenIn = nil;
+    NSString* alreadyOpenPath = nil;
+    for (const std::string& image : images) {
+        NSString* path = [fm stringWithFileSystemRepresentation:image.c_str() length:image.size()];
+        MainWindowController* owner = [self windowControllerShowingPath:path];
+        if (!owner) {
+            [newPaths addObject:path];
+        } else if (!alreadyOpenIn) {
+            alreadyOpenIn = owner;
+            alreadyOpenPath = path;
+        }
+    }
+
+    if (newPaths.count == 0 && alreadyOpenIn) {
+        [alreadyOpenIn selectImagePath:alreadyOpenPath];
+        [alreadyOpenIn showWindow:nil];
+        return;
+    }
+
     MainWindowController* target = [self emptyWindowController] ?: [self makeWindowController];
-    [target openURLs:urls];
+    NSString* emptyTitle = urls.count == 1 ? urls.firstObject.lastPathComponent : NSProcessInfo.processInfo.processName;
+    [target showImagePaths:newPaths emptyTitle:emptyTitle];
     [target showWindow:nil];
 }
 
