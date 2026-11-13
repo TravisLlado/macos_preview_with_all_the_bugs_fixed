@@ -176,7 +176,6 @@ static const int kThumbnailMaxPixels = 256;
     [content addSubview:_splitView];
     [_splitView adjustSubviews];
     [_splitView setPosition:kDefaultSidebarWidth ofDividerAtIndex:0];
-    [self setSidebarVisible:NO];  // shown only when more than one image is open
 }
 
 - (void)setSidebarVisible:(BOOL)visible {
@@ -235,9 +234,10 @@ static const int kThumbnailMaxPixels = 256;
         [self showSelectedImage];  // selection may not have changed (row 0 -> row 0)
     }
 
-    BOOL multiple = _imagePaths.count > 1;
-    [self setSidebarVisible:multiple];
-    if (multiple) {
+    // A single image gets the whole window; otherwise show the sidebar.
+    BOOL showSidebar = _imagePaths.count != 1;
+    [self setSidebarVisible:showSidebar];
+    if (showSidebar) {
         [self.window makeFirstResponder:_tableView];  // arrow keys move through the list
         [self requestThumbnailsForWantedRows];
     }

@@ -42,7 +42,7 @@ it runs, fix any errors, commit, push, and check off the phase here.
 - [x] **Phase 6 – Polish**
   - Persist window frame and sidebar width between launches.
   - Support opening a single image from Finder (Open With, or dragging onto the Dock icon): load its containing folder and select that file. Add the needed document types to Info.plist.
-  - *Revised after Phase 6:* each set of opened images gets its own window (the empty launch window is reused for the first set). The sidebar appears only when a window has more than one image; there is no user control for it. Closing the last window quits.
+  - *Revised after Phase 6:* each set of opened images gets its own window (the empty launch window is reused for the first set). The sidebar is hidden only when a window shows exactly one image (the empty launch window shows it); there is no user control for it. Finder can deliver one multi-file Open With as several requests, so requests arriving within 0.3 s are combined into one set. Closing the last window quits.
   - *Revised after Phase 6:* nothing is remembered between launches (window frame and sidebar width persistence removed).
   - *Revised after Phase 6:* opening files (File → Open with multiple selection, Finder Open With, Dock drops) shows exactly the chosen images, not their whole folder. Choosing a folder still shows all of its images.
 

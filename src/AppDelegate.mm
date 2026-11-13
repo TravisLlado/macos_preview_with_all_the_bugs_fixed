@@ -6,8 +6,13 @@
 // Offset of each new window from the front one, like Preview's cascading.
 static const CGFloat kCascadeOffset = 24.0;
 
+// Finder may deliver one multi-file "Open With" as several open requests in a
+// row; files arriving within this interval are treated as one set.
+static const NSTimeInterval kOpenCoalesceDelay = 0.3;
+
 @implementation AppDelegate {
     NSMutableArray<MainWindowController*>* _windowControllers;  // one per open window
+    NSMutableArray<NSURL*>* _pendingOpenURLs;                    // from Finder, not yet opened
 }
 
 #pragma mark - Menu construction
@@ -95,16 +100,23 @@ static NSMenu* AddSubmenu(NSMenu* menuBar, NSString* title) {
     }
 }
 
-// Each set of images opens in its own window. The front window is reused only
-// while it is still empty (e.g. the window shown at launch).
+// The frontmost window that has no images yet (e.g. the one shown at launch).
+- (MainWindowController*)emptyWindowController {
+    for (NSWindow* window in NSApp.orderedWindows) {
+        MainWindowController* controller = window.windowController;
+        if (window.isVisible && [_windowControllers containsObject:controller] && controller.isEmpty) {
+            return controller;
+        }
+    }
+    return nil;
+}
+
+// Each set of images opens in its own window, reusing an empty window if any.
 - (void)openImagesAtURLs:(NSArray<NSURL*>*)urls {
     if (urls.count == 0) {
         return;
     }
-    MainWindowController* target = NSApp.mainWindow.windowController;
-    if (![_windowControllers containsObject:target] || !target.isEmpty) {
-        target = [self makeWindowController];
-    }
+    MainWindowController* target = [self emptyWindowController] ?: [self makeWindowController];
     [target openURLs:urls];
     [target showWindow:nil];
 }
@@ -133,22 +145,32 @@ static NSMenu* AddSubmenu(NSMenu* menuBar, NSString* title) {
 - (void)applicationWillFinishLaunching:(NSNotification*)notification {
     (void)notification;
     _windowControllers = [NSMutableArray array];
+    _pendingOpenURLs = [NSMutableArray array];
     [self buildMainMenu];
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification*)notification {
     (void)notification;
-    // Start with an empty window, unless launching opened images already
+    // Start with an empty window, unless the app was launched to open images
     // (application:openURLs: arrives before this).
-    if (_windowControllers.count == 0) {
+    if (_windowControllers.count == 0 && _pendingOpenURLs.count == 0) {
         [[self makeWindowController] showWindow:nil];
     }
     [NSApp activateIgnoringOtherApps:YES];
 }
 
-// Finder "Open With" or files dropped on the Dock icon: show exactly those images.
+// Finder "Open With" or files dropped on the Dock icon: show exactly those
+// images together in one window, once the burst of requests has finished.
 - (void)application:(NSApplication*)application openURLs:(NSArray<NSURL*>*)urls {
     (void)application;
+    [_pendingOpenURLs addObjectsFromArray:urls];
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(openPendingURLs) object:nil];
+    [self performSelector:@selector(openPendingURLs) withObject:nil afterDelay:kOpenCoalesceDelay];
+}
+
+- (void)openPendingURLs {
+    NSArray<NSURL*>* urls = [_pendingOpenURLs copy];
+    [_pendingOpenURLs removeAllObjects];
     [self openImagesAtURLs:urls];
 }
 

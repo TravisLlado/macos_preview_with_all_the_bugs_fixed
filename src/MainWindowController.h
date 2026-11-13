@@ -1,7 +1,7 @@
 #import <AppKit/AppKit.h>
 
 // Owns one viewer window: a split view with the thumbnail sidebar on the left
-// (shown only when more than one image is open) and the image pane on the right.
+// (hidden when exactly one image is open) and the image pane on the right.
 @interface MainWindowController : NSWindowController <NSSplitViewDelegate>
 - (instancetype)init;
 
