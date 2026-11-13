@@ -1,6 +1,8 @@
 #import "MainWindowController.h"
 #import "ImageScrollView.h"
 
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+
 #include "ImageList.h"
 #include "ImageLoading.h"
 #include "ThumbnailCache.h"
@@ -199,14 +201,24 @@ static const int kThumbnailMaxPixels = 256;
     (void)sender;
     NSOpenPanel* panel = [NSOpenPanel openPanel];
     panel.canChooseDirectories = YES;
-    panel.canChooseFiles = NO;
+    panel.canChooseFiles = YES;
     panel.allowsMultipleSelection = NO;
+    // The same formats ImageList recognizes; folders stay selectable too.
+    panel.allowedContentTypes = @[
+        UTTypeJPEG, UTTypePNG, UTTypeHEIC, UTTypeHEIF, UTTypeTIFF, UTTypeGIF, UTTypeWebP, UTTypeBMP,
+    ];
     panel.prompt = @"Open";
-    panel.message = @"Choose a folder of images";
+    panel.message = @"Choose an image, or a folder of images";
     [panel beginSheetModalForWindow:self.window
                   completionHandler:^(NSModalResponse result) {
-                      if (result == NSModalResponseOK && panel.URL) {
-                          [self openFolder:panel.URL];
+                      NSURL* url = panel.URL;
+                      if (result != NSModalResponseOK || !url) {
+                          return;
+                      }
+                      if (url.hasDirectoryPath) {
+                          [self openFolder:url];
+                      } else {
+                          [self openFolder:url.URLByDeletingLastPathComponent selectingFile:url];
                       }
                   }];
 }
