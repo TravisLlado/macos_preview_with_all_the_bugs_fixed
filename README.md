@@ -33,6 +33,8 @@ Run a single test program directly, optionally filtered by name, e.g.
 
 - **File → Open…** (Cmd-O) and choose one or more images, or a folder. Exactly the chosen images open in a new window; a folder brings in all of its images. A single image fills the window; with several, a thumbnail sidebar is shown. Images that are already open in another window are not opened again.
 - Click a thumbnail or use the up/down arrow keys to switch images.
+- Drag thumbnails to rearrange them, or right-click the sidebar for **Sort By → Name / Date
+  Created / Date Modified**. Images always open sorted by name; your order is not saved.
 - **File → Move to Trash** (Cmd-Delete) moves the image selected in the sidebar to the Trash.
 - **Edit → Undo** (Cmd-Z) puts a trashed image back; **Redo** (Shift-Cmd-Z) trashes it again.
 - **View** menu: Zoom In (Cmd =), Zoom Out (Cmd -), Actual Size (Cmd 0), Zoom to Fit (Cmd 9). Pinch to zoom on a trackpad.

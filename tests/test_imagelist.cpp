@@ -5,12 +5,18 @@
 
 #include <filesystem>
 
+#include <sys/attr.h>
+#include <sys/time.h>
+#include <unistd.h>
+
 namespace fs = std::filesystem;
 using imagelist::collectImages;
 using imagelist::hasImageExtension;
 using imagelist::listImages;
 using imagelist::naturalCompare;
 using imagelist::sortByFilename;
+using imagelist::sortImages;
+using imagelist::SortOrder;
 
 static std::vector<std::string> filenames(const std::vector<std::string>& paths) {
     std::vector<std::string> names;
@@ -152,4 +158,66 @@ TEST(collect_keeps_explicitly_chosen_files_even_if_unreadable) {
     // Files chosen directly are passed through; they show a placeholder later.
     std::vector<std::string> result = collectImages({"/nonexistent/missing.jpg"});
     CHECK_EQ(result.size(), size_t(1));
+}
+
+// --- Sort By (name, creation date, modification date) -----------------------
+
+static void setDates(const std::string& path, time_t created, time_t modified) {
+    // Modification time first: on APFS an mtime earlier than the creation time
+    // also moves the creation time back.
+    struct timeval times[2] = {{modified, 0}, {modified, 0}};  // access, modification
+    utimes(path.c_str(), times);
+    struct attrlist attrs = {};
+    attrs.bitmapcount = ATTR_BIT_MAP_COUNT;
+    attrs.commonattr = ATTR_CMN_CRTIME;
+    struct timespec createdTime = {created, 0};
+    setattrlist(path.c_str(), &attrs, &createdTime, sizeof createdTime, 0);
+}
+
+// Three files whose name, creation and modification orders all differ.
+static std::string datedFolder() {
+    std::string dir = test::makeTempDir();
+    test::touch(dir + "/b.jpg");
+    test::touch(dir + "/a.jpg");
+    test::touch(dir + "/c.jpg");
+    setDates(dir + "/a.jpg", 1000000300, 1000000100);  // created last,   modified first
+    setDates(dir + "/b.jpg", 1000000100, 1000000200);  // created first,  modified second
+    setDates(dir + "/c.jpg", 1000000200, 1000000300);  // created second, modified last
+    return dir;
+}
+
+TEST(sort_by_name) {
+    std::string dir = datedFolder();
+    std::vector<std::string> paths = {dir + "/c.jpg", dir + "/a.jpg", dir + "/b.jpg"};
+    sortImages(paths, SortOrder::Name);
+    CHECK_EQ(join(filenames(paths)), std::string("a.jpg,b.jpg,c.jpg"));
+    fs::remove_all(dir);
+}
+
+TEST(sort_by_date_created_oldest_first) {
+    std::string dir = datedFolder();
+    std::vector<std::string> paths = {dir + "/a.jpg", dir + "/b.jpg", dir + "/c.jpg"};
+    sortImages(paths, SortOrder::DateCreated);
+    CHECK_EQ(join(filenames(paths)), std::string("b.jpg,c.jpg,a.jpg"));
+    fs::remove_all(dir);
+}
+
+TEST(sort_by_date_modified_oldest_first) {
+    std::string dir = datedFolder();
+    std::vector<std::string> paths = {dir + "/c.jpg", dir + "/b.jpg", dir + "/a.jpg"};
+    sortImages(paths, SortOrder::DateModified);
+    CHECK_EQ(join(filenames(paths)), std::string("a.jpg,b.jpg,c.jpg"));
+    fs::remove_all(dir);
+}
+
+TEST(equal_dates_fall_back_to_name_order) {
+    std::string dir = test::makeTempDir();
+    for (const char* name : {"img10.jpg", "img2.jpg", "img1.jpg"}) {
+        test::touch(dir + "/" + name);
+        setDates(dir + "/" + name, 1000000000, 1000000000);
+    }
+    std::vector<std::string> paths = {dir + "/img10.jpg", dir + "/img2.jpg", dir + "/img1.jpg"};
+    sortImages(paths, SortOrder::DateModified);
+    CHECK_EQ(join(filenames(paths)), std::string("img1.jpg,img2.jpg,img10.jpg"));
+    fs::remove_all(dir);
 }

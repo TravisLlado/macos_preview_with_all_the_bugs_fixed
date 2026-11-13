@@ -15,6 +15,10 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <objc/runtime.h>
 
+#include <sys/attr.h>
+#include <sys/time.h>
+#include <unistd.h>
+
 #include "AppTestSupport.h"
 
 #include <filesystem>
@@ -790,4 +794,150 @@ TEST(each_window_has_its_own_undo_history) {
     endEvent();
     CHECK(a.window.undoManager.canUndo);
     CHECK(!b.window.undoManager.canUndo);
+}
+
+#pragma mark - Reordering and Sort By
+
+// Three images whose name, creation and modification orders all differ.
+static std::string datedCopies() {
+    std::string dir = folderOfCopies({"b.jpg", "a.jpg", "c.jpg"});
+    auto setDates = [&](const char* name, time_t created, time_t modified) {
+        std::string path = dir + "/" + name;
+        // Modification time first: on APFS an mtime earlier than the creation time
+        // also moves the creation time back.
+        struct timeval times[2] = {{modified, 0}, {modified, 0}};
+        utimes(path.c_str(), times);
+        struct attrlist attrs = {};
+        attrs.bitmapcount = ATTR_BIT_MAP_COUNT;
+        attrs.commonattr = ATTR_CMN_CRTIME;
+        struct timespec createdTime = {created, 0};
+        setattrlist(path.c_str(), &attrs, &createdTime, sizeof createdTime, 0);
+    };
+    setDates("a.jpg", 1000000300, 1000000100);
+    setDates("b.jpg", 1000000100, 1000000200);
+    setDates("c.jpg", 1000000200, 1000000300);
+    return dir;
+}
+
+static NSMenu* sortMenu(MainWindowController* c) {
+    return [tableOf(c).menu itemWithTitle:@"Sort By"].submenu;
+}
+
+static std::string checkedSort(MainWindowController* c) {
+    std::string checked;
+    for (NSMenuItem* item in sortMenu(c).itemArray) {
+        [c validateMenuItem:item];
+        if (item.state == NSControlStateValueOn) checked += (checked.empty() ? "" : ",") + test::str(item.title);
+    }
+    return checked.empty() ? "(none)" : checked;
+}
+
+TEST(images_always_open_in_filename_order) {
+    std::string dir = datedCopies();
+    App app;
+    app.open(@[ url(dir) ]);
+    MainWindowController* c = app.controllers()[0];
+    CHECK_EQ(names(c), std::string("a.jpg,b.jpg,c.jpg"));
+    CHECK(c.sidebarOrder == SidebarOrderName);
+}
+
+TEST(sidebar_right_click_menu_offers_sort_by_name_and_dates) {
+    App app;
+    app.open(@[ sample("a1.jpg"), sample("a2.jpg") ]);
+    MainWindowController* c = app.controllers()[0];
+    NSMenu* menu = sortMenu(c);
+    REQUIRE(menu != nil);
+    std::string titles;
+    for (NSMenuItem* item in menu.itemArray) titles += (titles.empty() ? "" : ",") + test::str(item.title);
+    CHECK_EQ(titles, std::string("Name,Date Created,Date Modified"));
+    for (NSMenuItem* item in menu.itemArray) CHECK([c validateMenuItem:item]);
+    CHECK_EQ(checkedSort(c), std::string("Name"));
+}
+
+TEST(sort_by_reorders_the_sidebar_and_keeps_the_selection) {
+    std::string dir = datedCopies();
+    App app;
+    app.open(@[ url(dir) ]);
+    MainWindowController* c = app.controllers()[0];
+    [tableOf(c) selectRowIndexes:[NSIndexSet indexSetWithIndex:1] byExtendingSelection:NO];  // b.jpg
+    REQUIRE(waitForImage(c));
+
+    [NSApp sendAction:@selector(sortSidebar:) to:c from:[sortMenu(c) itemWithTitle:@"Date Created"]];
+    CHECK_EQ(names(c), std::string("b.jpg,c.jpg,a.jpg"));
+    CHECK_EQ(checkedSort(c), std::string("Date Created"));
+    CHECK_EQ(tableOf(c).selectedRow, NSInteger(0));  // still b.jpg
+    CHECK_EQ(test::str(c.window.title), std::string("b.jpg"));
+
+    [c sortImagesBy:SidebarOrderDateModified];
+    CHECK_EQ(names(c), std::string("a.jpg,b.jpg,c.jpg"));
+    CHECK_EQ(checkedSort(c), std::string("Date Modified"));
+    CHECK_EQ(tableOf(c).selectedRow, NSInteger(1));  // b.jpg followed to its new row
+
+    [c sortImagesBy:SidebarOrderName];
+    CHECK_EQ(names(c), std::string("a.jpg,b.jpg,c.jpg"));
+    CHECK_EQ(checkedSort(c), std::string("Name"));
+}
+
+TEST(dragging_a_thumbnail_moves_it) {
+    App app;
+    app.open(@[ sample("a1.jpg"), sample("a2.jpg"), sample("a3.png"), sample("a10.jpg") ]);
+    MainWindowController* c = app.controllers()[0];
+    NSTableView* table = tableOf(c);
+    CHECK([table.registeredDraggedTypes containsObject:@"com.local.previewviewer.sidebar-row"]);
+
+    // Drag a1 (row 0) to between a3 and a10, as the table's drop callbacks report it.
+    [table selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
+    NSDraggingSession* session = nil;  // not used by the app
+    id<NSDraggingInfo> dropInfo = nil;  // not used by the app (validateDrop checks the source)
+    [table.dataSource tableView:table draggingSession:session willBeginAtPoint:NSZeroPoint
+                  forRowIndexes:[NSIndexSet indexSetWithIndex:0]];
+    CHECK([table.dataSource tableView:table acceptDrop:dropInfo row:3 dropOperation:NSTableViewDropAbove]);
+    CHECK_EQ(names(c), std::string("a2.jpg,a3.png,a1.jpg,a10.jpg"));
+    CHECK_EQ(table.selectedRow, NSInteger(2));  // the moved image stays selected
+    CHECK_EQ(test::str(c.window.title), std::string("a1.jpg"));
+    CHECK(c.sidebarOrder == SidebarOrderCustom);
+    CHECK_EQ(checkedSort(c), std::string("(none)"));
+
+    // Upwards: a10 (row 3) to the top.
+    [c moveImageAtRow:3 toRow:0];
+    CHECK_EQ(names(c), std::string("a10.jpg,a2.jpg,a3.png,a1.jpg"));
+}
+
+TEST(reordering_and_sorting_are_not_undoable) {
+    App app;
+    app.open(@[ sample("a1.jpg"), sample("a2.jpg"), sample("a3.png") ]);
+    MainWindowController* c = app.controllers()[0];
+    [c moveImageAtRow:0 toRow:3];
+    endEvent();
+    [c sortImagesBy:SidebarOrderDateModified];
+    endEvent();
+    CHECK(!c.window.undoManager.canUndo);
+}
+
+TEST(a_custom_order_is_not_carried_to_a_new_window) {
+    App app;
+    app.open(@[ sample("a1.jpg"), sample("a2.jpg"), sample("a3.png") ]);
+    MainWindowController* c = app.controllers()[0];
+    app.open(@[ sample("a10.jpg") ]);  // a second window, so closing the first doesn't quit
+    [c moveImageAtRow:0 toRow:3];
+    [c.window performClose:nil];
+    app.open(@[ sample("a1.jpg"), sample("a2.jpg"), sample("a3.png") ]);
+    MainWindowController* reopened = app.front();
+    REQUIRE(reopened != nil);
+    CHECK_EQ(names(reopened), std::string("a1.jpg,a2.jpg,a3.png"));
+}
+
+TEST(undo_after_reordering_restores_the_exact_row) {
+    std::string dir = folderOfCopies({"r1.jpg", "r2.jpg", "r3.jpg", "r4.jpg"});
+    resetTrash();
+    App app;
+    app.open(@[ url(dir) ]);
+    MainWindowController* c = app.controllers()[0];
+    [c moveImageAtRow:3 toRow:0];  // r4,r1,r2,r3
+    [tableOf(c) selectRowIndexes:[NSIndexSet indexSetWithIndex:2] byExtendingSelection:NO];  // r2
+    [c moveToTrash:nil];
+    endEvent();
+    CHECK_EQ(names(c), std::string("r4.jpg,r1.jpg,r3.jpg"));
+    [c.window.undoManager undo];
+    CHECK_EQ(names(c), std::string("r4.jpg,r1.jpg,r2.jpg,r3.jpg"));
 }

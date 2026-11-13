@@ -6,6 +6,8 @@
 #include <filesystem>
 #include <system_error>
 
+#include <sys/stat.h>
+
 namespace fs = std::filesystem;
 
 namespace {
@@ -86,6 +88,33 @@ void sortByFilename(std::vector<std::string>& paths) {
         if (paths.empty() || paths.back() != entry.second) {  // drop duplicates
             paths.push_back(std::move(entry.second));
         }
+    }
+}
+
+void sortImages(std::vector<std::string>& paths, SortOrder order) {
+    sortByFilename(paths);  // removes duplicates; also the tie-break order below
+    if (order == SortOrder::Name) {
+        return;
+    }
+    auto timeOf = [order](const std::string& path) {
+        struct stat info {};
+        if (stat(path.c_str(), &info) != 0) {
+            return 0.0;
+        }
+        const timespec& t = order == SortOrder::DateCreated ? info.st_birthtimespec : info.st_mtimespec;
+        return static_cast<double>(t.tv_sec) + static_cast<double>(t.tv_nsec) / 1e9;
+    };
+    std::vector<std::pair<double, std::string>> entries;  // (time, path), already in name order
+    entries.reserve(paths.size());
+    for (std::string& path : paths) {
+        double time = timeOf(path);
+        entries.emplace_back(time, std::move(path));
+    }
+    std::stable_sort(entries.begin(), entries.end(),
+                     [](const auto& a, const auto& b) { return a.first < b.first; });
+    paths.clear();
+    for (auto& entry : entries) {
+        paths.push_back(std::move(entry.second));
     }
 }
 

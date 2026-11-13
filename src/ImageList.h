@@ -20,6 +20,16 @@ int naturalCompare(const std::string& a, const std::string& b);
 // and removes duplicates.
 void sortByFilename(std::vector<std::string>& paths);
 
+enum class SortOrder {
+    Name,          // natural filename order (sortByFilename)
+    DateCreated,   // file creation date, oldest first
+    DateModified,  // file modification date, oldest first
+};
+
+// Sorts full paths by `order`; equal dates fall back to filename order.
+// Duplicates are removed. Files whose dates cannot be read sort first.
+void sortImages(std::vector<std::string>& paths, SortOrder order);
+
 // Full paths of the image files directly inside `directory` (not recursive,
 // hidden files skipped), sorted with sortByFilename.
 // Returns an empty list if the directory cannot be read.

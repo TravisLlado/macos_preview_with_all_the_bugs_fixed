@@ -1,6 +1,7 @@
 #import "MainWindowController.h"
 #import "ImageScrollView.h"
 
+#include "ImageList.h"
 #include "ImageLoading.h"
 #include "ThumbnailCache.h"
 
@@ -13,6 +14,9 @@ static const CGFloat kMinMainPaneWidth = 300.0;
 static const CGFloat kRowHeight = 150.0;
 static const CGFloat kThumbnailHeight = 112.0;
 static const int kThumbnailMaxPixels = 256;
+
+// Pasteboard type for dragging a sidebar row to a new position.
+static NSPasteboardType const kSidebarRowType = @"com.local.previewviewer.sidebar-row";
 
 #pragma mark - Sidebar cell
 
@@ -93,6 +97,9 @@ static const int kThumbnailMaxPixels = 256;
     NSImage* _placeholder;
 
     BOOL _removingRow;  // ignore selection changes while rows are removed/inserted
+
+    SidebarOrder _sidebarOrder;  // current Sort By choice, or custom after a drag
+    NSInteger _draggedRow;       // row being dragged within the sidebar
 }
 
 - (instancetype)init {
@@ -153,6 +160,11 @@ static const int kThumbnailMaxPixels = 256;
     _tableView.allowsEmptySelection = YES;
     _tableView.dataSource = self;
     _tableView.delegate = self;
+    // Rows can be dragged to a new position (within this sidebar only).
+    [_tableView registerForDraggedTypes:@[ kSidebarRowType ]];
+    [_tableView setDraggingSourceOperationMask:NSDragOperationMove forLocal:YES];
+    _tableView.draggingDestinationFeedbackStyle = NSTableViewDraggingDestinationFeedbackStyleGap;
+    _tableView.menu = [self makeSidebarMenu];
     _sidebarScrollView.documentView = _tableView;
     [_tableView sizeLastColumnToFit];  // the single column spans the sidebar
 
@@ -211,8 +223,9 @@ static const int kThumbnailMaxPixels = 256;
 
 - (void)showImagePaths:(NSArray<NSString*>*)imagePaths emptyTitle:(NSString*)emptyTitle {
     _emptyTitle = emptyTitle;
-    _imagePaths = [imagePaths copy];
+    _imagePaths = [imagePaths copy];  // always opened in filename order
     _currentPath = nil;
+    _sidebarOrder = SidebarOrderName;
 
     ++_listToken;
     _thumbnails.clear();
@@ -416,6 +429,137 @@ static const int kThumbnailMaxPixels = 256;
     [_viewer zoomToFit];
 }
 
+#pragma mark - Reordering and Sort By
+//
+// The order lasts only while the window is open; nothing is saved, and
+// neither reordering nor sorting is undoable.
+
+- (NSMenu*)makeSidebarMenu {
+    NSMenu* menu = [[NSMenu alloc] initWithTitle:@""];
+    NSMenuItem* sortBy = [menu addItemWithTitle:@"Sort By" action:nil keyEquivalent:@""];
+    NSMenu* orders = [[NSMenu alloc] initWithTitle:@"Sort By"];
+    struct {
+        NSString* title;
+        SidebarOrder order;
+    } choices[] = {
+        {@"Name", SidebarOrderName},
+        {@"Date Created", SidebarOrderDateCreated},
+        {@"Date Modified", SidebarOrderDateModified},
+    };
+    for (auto& choice : choices) {
+        NSMenuItem* item = [orders addItemWithTitle:choice.title action:@selector(sortSidebar:) keyEquivalent:@""];
+        item.tag = choice.order;
+        item.target = self;
+    }
+    sortBy.submenu = orders;
+    return menu;
+}
+
+- (SidebarOrder)sidebarOrder {
+    return _sidebarOrder;
+}
+
+- (IBAction)sortSidebar:(NSMenuItem*)sender {
+    [self sortImagesBy:(SidebarOrder)sender.tag];
+}
+
+- (void)sortImagesBy:(SidebarOrder)order {
+    if (order == SidebarOrderCustom) {
+        return;
+    }
+    std::vector<std::string> paths;
+    for (NSString* p in _imagePaths) {
+        paths.push_back(p.fileSystemRepresentation);
+    }
+    imagelist::sortImages(paths, order == SidebarOrderName          ? imagelist::SortOrder::Name
+                                 : order == SidebarOrderDateCreated ? imagelist::SortOrder::DateCreated
+                                                                    : imagelist::SortOrder::DateModified);
+    NSFileManager* fm = NSFileManager.defaultManager;
+    NSMutableArray<NSString*>* sorted = [NSMutableArray arrayWithCapacity:paths.size()];
+    for (const std::string& p : paths) {
+        [sorted addObject:[fm stringWithFileSystemRepresentation:p.c_str() length:p.size()]];
+    }
+    NSString* selected = [self selectedSidebarPath];
+    _imagePaths = sorted;
+    _sidebarOrder = order;
+
+    // Keep the same image selected (the viewer does not change).
+    _removingRow = YES;
+    [_tableView reloadData];
+    NSInteger row = selected ? [self rowForPath:selected] : -1;
+    if (row >= 0) {
+        [_tableView selectRowIndexes:[NSIndexSet indexSetWithIndex:(NSUInteger)row] byExtendingSelection:NO];
+        [_tableView scrollRowToVisible:row];
+    }
+    _removingRow = NO;
+    [self requestThumbnailsForWantedRows];
+}
+
+// Moves one image to a new position; `toRow` is the insertion point in the
+// list before the move (as a table drop reports it).
+- (void)moveImageAtRow:(NSInteger)fromRow toRow:(NSInteger)toRow {
+    NSInteger count = (NSInteger)_imagePaths.count;
+    if (fromRow < 0 || fromRow >= count || toRow < 0 || toRow > count) {
+        return;
+    }
+    NSInteger destination = toRow > fromRow ? toRow - 1 : toRow;  // index after removal
+    if (destination == fromRow) {
+        return;
+    }
+    NSMutableArray<NSString*>* paths = [_imagePaths mutableCopy];
+    NSString* moved = paths[(NSUInteger)fromRow];
+    [paths removeObjectAtIndex:(NSUInteger)fromRow];
+    [paths insertObject:moved atIndex:(NSUInteger)destination];
+    _imagePaths = paths;
+    _sidebarOrder = SidebarOrderCustom;
+
+    _removingRow = YES;  // the selection follows the moved row; the viewer does not change
+    [_tableView moveRowAtIndex:fromRow toIndex:destination];
+    _removingRow = NO;
+}
+
+- (id<NSPasteboardWriting>)tableView:(NSTableView*)tableView pasteboardWriterForRow:(NSInteger)row {
+    (void)tableView;
+    NSPasteboardItem* item = [[NSPasteboardItem alloc] init];
+    [item setString:[NSString stringWithFormat:@"%ld", (long)row] forType:kSidebarRowType];
+    return item;
+}
+
+- (void)tableView:(NSTableView*)tableView
+    draggingSession:(NSDraggingSession*)session
+    willBeginAtPoint:(NSPoint)screenPoint
+       forRowIndexes:(NSIndexSet*)rowIndexes {
+    (void)tableView;
+    (void)session;
+    (void)screenPoint;
+    _draggedRow = (NSInteger)rowIndexes.firstIndex;
+}
+
+- (NSDragOperation)tableView:(NSTableView*)tableView
+                validateDrop:(id<NSDraggingInfo>)info
+                 proposedRow:(NSInteger)row
+       proposedDropOperation:(NSTableViewDropOperation)dropOperation {
+    (void)row;
+    if (info.draggingSource != tableView) {
+        return NSDragOperationNone;  // only rows from this sidebar
+    }
+    if (dropOperation == NSTableViewDropOn) {
+        [tableView setDropRow:row dropOperation:NSTableViewDropAbove];  // drop between rows
+    }
+    return NSDragOperationMove;
+}
+
+- (BOOL)tableView:(NSTableView*)tableView
+       acceptDrop:(id<NSDraggingInfo>)info
+              row:(NSInteger)row
+    dropOperation:(NSTableViewDropOperation)dropOperation {
+    (void)tableView;
+    (void)info;
+    (void)dropOperation;
+    [self moveImageAtRow:_draggedRow toRow:row];
+    return YES;
+}
+
 #pragma mark - Move to Trash
 
 // The image selected in the sidebar, or nil (also nil when the sidebar is
@@ -544,6 +688,10 @@ static NSString* const kMoveToTrashActionName = @"Move to Trash";
 
 - (BOOL)validateMenuItem:(NSMenuItem*)item {
     SEL action = item.action;
+    if (action == @selector(sortSidebar:)) {
+        item.state = item.tag == _sidebarOrder ? NSControlStateValueOn : NSControlStateValueOff;
+        return _imagePaths.count > 1;
+    }
     if (action == @selector(moveToTrash:)) {
         return [self selectedSidebarPath] != nil;
     }

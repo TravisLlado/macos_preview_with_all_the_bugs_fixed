@@ -59,6 +59,11 @@ it runs, fix any errors, commit, push, and check off the phase here.
   path and row. Trashing uses `NSFileManager trashItemAtURL:` (synchronous, reports where the item
   went). Opening, selecting and zooming are not undoable. New file-changing actions should
   register an undo.
+- [x] **Reorder and Sort By** – drag thumbnails to rearrange; right-click the sidebar for
+  Sort By → Name / Date Created / Date Modified (dates oldest first, ties by name; a checkmark
+  shows the active sort, none after a manual drag). Images always open in filename order; the
+  order lasts only while the window is open, is never saved, and is not undoable. Undoing a
+  trash restores the file at the exact row it came from.
 - [x] **Unit tests** – `ctest --test-dir build`. One test program per area in `tests/`
   (ImageList, ImageLoading, ThumbnailCache, viewer, app behavior, app bundle), written against
   `PreviewViewerCore`, a static library of every source file except `main.mm`. Every design

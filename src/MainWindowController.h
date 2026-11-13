@@ -1,5 +1,13 @@
 #import <AppKit/AppKit.h>
 
+// Sidebar order: one of the Sort By choices, or Custom after a drag.
+typedef NS_ENUM(NSInteger, SidebarOrder) {
+    SidebarOrderName,
+    SidebarOrderDateCreated,
+    SidebarOrderDateModified,
+    SidebarOrderCustom,
+};
+
 // Owns one viewer window: a split view with the thumbnail sidebar on the left
 // (hidden when exactly one image is open) and the image pane on the right.
 @interface MainWindowController : NSWindowController <NSSplitViewDelegate>
@@ -17,4 +25,14 @@
 
 // Selects `path` (one of imagePaths) and shows it in the viewer.
 - (void)selectImagePath:(NSString*)path;
+
+// The current sidebar order (Name when images are first opened).
+@property(nonatomic, readonly) SidebarOrder sidebarOrder;
+
+// Re-sorts the sidebar (right-click → Sort By). The selected image stays selected.
+- (void)sortImagesBy:(SidebarOrder)order;
+
+// Moves an image within the sidebar, as dragging a thumbnail does. `toRow`
+// is the insertion point counted before the move.
+- (void)moveImageAtRow:(NSInteger)fromRow toRow:(NSInteger)toRow;
 @end
